@@ -3,7 +3,7 @@
 import subprocess
 import sys
 import os
-from typing import List, Optional, NamedTuple
+from typing import List, Optional, NamedTuple, Dict, Tuple
 import curses
 from datetime import datetime, timedelta
 import time
@@ -17,9 +17,6 @@ class BranchInfo(NamedTuple):
     commit_message: str
     commit_author: str
     has_uncommitted_changes: bool
-    is_merged: bool
-    has_open_pr: bool
-    pr_number: Optional[int]
     is_remote: bool
     remote_name: Optional[str]
     
@@ -55,10 +52,7 @@ class GitBranchManager:
         self.filtered_branches: List[BranchInfo] = []  # Filtered view of branches
         self.current_branch: Optional[str] = None
         self.selected_index: int = 0
-        self.main_branch: Optional[str] = None
-        self.working_dir: str = os.getcwd()  # Store current working directory - must be before _check_gh_cli()
-        self.gh_available: bool = self._check_gh_cli()
-        self.pr_cache: dict = {}  # Cache PR lookups for performance
+        self.working_dir: str = os.getcwd()  # Store current working directory
         self.show_remotes: bool = False  # Toggle for showing remote branches
         
         # Filters
@@ -87,104 +81,6 @@ class GitBranchManager:
         except subprocess.CalledProcessError:
             return None
         
-    def _check_gh_cli(self) -> bool:
-        """Check if gh CLI is available and this is a GitHub repo."""
-        # First check if gh is installed
-        try:
-            self._run_command(["gh", "--version"], capture_output=True, check=True)
-        except (subprocess.CalledProcessError, FileNotFoundError):
-            return False
-            
-        # Then check if this is a GitHub repository
-        try:
-            result = self._run_command(
-                ["git", "remote", "get-url", "origin"],
-                capture_output=True,
-                text=True,
-                check=True
-            )
-            remote_url = result.stdout.strip().lower()
-            # Check for github.com in the URL (works for HTTPS and SSH)
-            return "github.com" in remote_url
-        except subprocess.CalledProcessError:
-            # No origin remote, PR detection won't work anyway
-            return False
-    
-    def _get_main_branch(self) -> str:
-        """Get the main branch name (main or master)."""
-        if self.main_branch:
-            return self.main_branch
-            
-        try:
-            # Try to get the default branch from remote
-            result = self._run_command(
-                ["git", "symbolic-ref", "refs/remotes/origin/HEAD"],
-                capture_output=True,
-                text=True,
-                check=True
-            )
-            self.main_branch = result.stdout.strip().split('/')[-1]
-        except subprocess.CalledProcessError:
-            # Fallback: check if main or master exists
-            try:
-                self._run_command(["git", "rev-parse", "--verify", "main"], capture_output=True, check=True)
-                self.main_branch = "main"
-            except subprocess.CalledProcessError:
-                self.main_branch = "master"
-        
-        return self.main_branch
-    
-    def _check_if_merged(self, branch: str) -> bool:
-        """Check if branch has been merged into main."""
-        try:
-            main_branch = self._get_main_branch()
-            # Check if all commits from branch are in main
-            result = self._run_command(
-                ["git", "cherry", main_branch, branch],
-                capture_output=True,
-                text=True,
-                check=True
-            )
-            # If no output, branch is fully merged
-            return len(result.stdout.strip()) == 0
-        except subprocess.CalledProcessError:
-            return False
-    
-    def _get_pr_info(self, branch: str) -> tuple[bool, Optional[int]]:
-        """Check if branch has an open PR using gh CLI."""
-        if not self.gh_available:
-            return False, None
-            
-        # Check cache first
-        if branch in self.pr_cache:
-            return self.pr_cache[branch]
-            
-        try:
-            # List PRs for this branch
-            result = self._run_command(
-                ["gh", "pr", "list", "--head", branch, "--json", "number,state"],
-                capture_output=True,
-                text=True,
-                check=True
-            )
-            
-            if result.stdout.strip():
-                import json
-                prs = json.loads(result.stdout)
-                # Look for open PRs
-                for pr in prs:
-                    if pr.get('state') == 'OPEN':
-                        pr_info = (True, pr.get('number'))
-                        self.pr_cache[branch] = pr_info
-                        return pr_info
-            
-            self.pr_cache[branch] = (False, None)
-            return False, None
-            
-        except (subprocess.CalledProcessError, json.JSONDecodeError):
-            self.pr_cache[branch] = (False, None)
-            return False, None
-    
     def get_branch_info(self, branch: str, is_remote: bool = False, remote_name: Optional[str] = None) -> Optional[BranchInfo]:
         """Get commit info for a specific branch."""
         try:
@@ -216,15 +112,6 @@ class GitBranchManager:
                         )
                         has_uncommitted_changes = bool(status_result.stdout.strip())
                     
-                    # Check merge and PR status (only for local branches)
-                    is_merged = False
-                    has_open_pr = False
-                    pr_number = None
-                    
-                    if not is_remote:
-                        is_merged = self._check_if_merged(branch)
-                        has_open_pr, pr_number = self._get_pr_info(branch)
-                    
                     return BranchInfo(
                         name=branch,
                         is_current=(branch == self.current_branch),
@@ -233,9 +120,6 @@ class GitBranchManager:
                         commit_message=commit_message,
                         commit_author=commit_author,
                         has_uncommitted_changes=has_uncommitted_changes,
-                        is_merged=is_merged,
-                        has_open_pr=has_open_pr,
-                        pr_number=pr_number,
                         is_remote=is_remote,
                         remote_name=remote_name
                     )
@@ -244,9 +128,96 @@ class GitBranchManager:
         except subprocess.CalledProcessError:
             return None
     
-    def get_branches(self) -> None:
-        """Get list of git branches with commit info."""
+    def _get_batch_branch_info(self, branches: List[Tuple[str, bool, Optional[str]]]) -> Dict[str, Dict]:
+        """Get branch info for multiple branches in a single git command."""
+        if not branches:
+            return {}
+        
+        # Build format string for git for-each-ref
+        format_str = "%(refname:short)|%(objectname:short)|%(committerdate:unix)|%(subject)|%(committeremail)"
+        
+        # Get info for all branches at once
+        branch_names = [b[0] for b in branches]
+        
+        # Use git for-each-ref which is much faster than individual git log commands
+        cmd = ["git", "for-each-ref", f"--format={format_str}"]
+        
+        # Add ref patterns for the branches we want
+        ref_patterns = []
+        for branch_name, is_remote, _ in branches:
+            if is_remote:
+                ref_patterns.append(f"refs/remotes/{branch_name}")
+            else:
+                ref_patterns.append(f"refs/heads/{branch_name}")
+        
+        cmd.extend(ref_patterns)
+        
         try:
+            result = self._run_command(
+                cmd,
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            
+            branch_data = {}
+            for line in result.stdout.strip().split('\n'):
+                if line:
+                    parts = line.split('|', 4)
+                    if len(parts) == 5:
+                        ref_name = parts[0]
+                        # Extract branch name from ref
+                        if ref_name.startswith('refs/heads/'):
+                            branch_name = ref_name[11:]  # Remove 'refs/heads/'
+                        elif ref_name.startswith('refs/remotes/'):
+                            branch_name = ref_name[13:]  # Remove 'refs/remotes/'
+                        else:
+                            branch_name = ref_name
+                        
+                        branch_data[branch_name] = {
+                            'hash': parts[1],
+                            'timestamp': int(parts[2]),
+                            'message': parts[3],
+                            'author': parts[4]
+                        }
+            
+            return branch_data
+            
+        except subprocess.CalledProcessError:
+            return {}
+    
+    def _check_uncommitted_changes_batch(self) -> bool:
+        """Check if current branch has uncommitted changes."""
+        try:
+            status_result = self._run_command(
+                ["git", "status", "--porcelain"],
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            return bool(status_result.stdout.strip())
+        except subprocess.CalledProcessError:
+            return False
+    
+    def show_loading_message(self, stdscr, message: str) -> None:
+        """Show a loading message in the center of the screen."""
+        if stdscr:
+            stdscr.clear()
+            height, width = stdscr.getmaxyx()
+            y = height // 2
+            x = (width - len(message)) // 2
+            if x >= 0 and y >= 0:
+                try:
+                    stdscr.addstr(y, x, message)
+                    stdscr.refresh()
+                except curses.error:
+                    pass
+    
+    def get_branches(self, stdscr=None) -> None:
+        """Get list of git branches with commit info - optimized version."""
+        try:
+            if stdscr:
+                self.show_loading_message(stdscr, "Loading branches...")
             # First get the current branch
             current_result = self._run_command(
                 ["git", "branch", "--show-current"],
@@ -257,6 +228,9 @@ class GitBranchManager:
             self.current_branch = current_result.stdout.strip()
             
             self.branches = []
+            
+            # Collect all branch names first
+            all_branches = []
             
             # Get local branches
             result = self._run_command(
@@ -272,10 +246,7 @@ class GitBranchManager:
                 branch_name = line.strip()
                 if branch_name.startswith('* '):
                     branch_name = branch_name[2:]
-                
-                branch_info = self.get_branch_info(branch_name)
-                if branch_info:
-                    self.branches.append(branch_info)
+                all_branches.append((branch_name, False, None))  # (name, is_remote, remote_name)
             
             # Get remote branches if enabled
             if self.show_remotes:
@@ -287,6 +258,9 @@ class GitBranchManager:
                 )
                 
                 remote_lines = remote_result.stdout.strip().split('\n') if remote_result.stdout.strip() else []
+                
+                # First pass: collect local branch names for duplicate checking
+                local_branch_names = {b[0] for b in all_branches if not b[1]}
                 
                 for line in remote_lines:
                     branch_name = line.strip()
@@ -301,13 +275,39 @@ class GitBranchManager:
                         branch_short_name = parts[1]
                         
                         # Skip if this branch exists locally
-                        local_exists = any(b.name == branch_short_name and not b.is_remote for b in self.branches)
-                        if local_exists:
+                        if branch_short_name in local_branch_names:
                             continue
                         
-                        branch_info = self.get_branch_info(branch_name, is_remote=True, remote_name=remote_name)
-                        if branch_info:
-                            self.branches.append(branch_info)
+                        all_branches.append((branch_name, True, remote_name))
+            
+            # Get batch info for all branches
+            batch_info = self._get_batch_branch_info(all_branches)
+            
+            # Check uncommitted changes once for current branch
+            has_uncommitted = False
+            if self.current_branch:
+                has_uncommitted = self._check_uncommitted_changes_batch()
+            
+            # Build BranchInfo objects
+            for branch_name, is_remote, remote_name in all_branches:
+                if branch_name in batch_info:
+                    info = batch_info[branch_name]
+                    
+                    branch_info = BranchInfo(
+                        name=branch_name,
+                        is_current=(branch_name == self.current_branch),
+                        commit_hash=info['hash'],
+                        commit_date=datetime.fromtimestamp(info['timestamp']),
+                        commit_message=info['message'],
+                        commit_author=info['author'],
+                        has_uncommitted_changes=(has_uncommitted if branch_name == self.current_branch else False),
+                        is_remote=is_remote,
+                        remote_name=remote_name
+                    )
+                    self.branches.append(branch_info)
+            
+            # Sort branches by commit date (most recent first)
+            self.branches.sort(key=lambda b: b.commit_date, reverse=True)
             
             # Apply filters
             self._apply_filters()
@@ -565,14 +565,12 @@ class GitBranchManager:
             ("  *          Current branch", 0),
             ("  ↓          Remote branch", 0),
             ("  [modified] Uncommitted changes", 0),
-            ("  [PR#123]   Has open pull request (GitHub only)", 0),
-            ("  [merged]   Merged into main branch", 0),
             ("", 0),
             ("Color Coding:", curses.A_BOLD),
             ("  Green      Current branch", 0),
-            ("  Cyan       Branch names / PR status", 0),
+            ("  Cyan       Branch names", 0),
             ("  Yellow     Modified indicator", 0),
-            ("  Magenta    Recent commits (<1 week) / Merged", 0),
+            ("  Magenta    Recent commits (<1 week)", 0),
             ("  Blue       Commit hashes", 0),
             ("  Red        Old branches (>1 month)", 0),
             ("", 0),
@@ -655,7 +653,7 @@ class GitBranchManager:
         curses.init_pair(7, curses.COLOR_RED, curses.COLOR_BLACK)  # Old branches (> 1 month)
         curses.init_pair(8, curses.COLOR_WHITE, curses.COLOR_BLACK)  # Normal text
         
-        self.get_branches()
+        self.get_branches(stdscr)
         
         while True:
             stdscr.clear()
@@ -723,17 +721,8 @@ class GitBranchManager:
                 separator = " • "
                 modified_indicator = " [modified]" if branch_info.has_uncommitted_changes else ""
                 
-                # PR and merge status indicators
-                status_indicators = []
-                if branch_info.has_open_pr:
-                    status_indicators.append(f"PR#{branch_info.pr_number}")
-                if branch_info.is_merged:
-                    status_indicators.append("merged")
-                
-                status_str = f" [{', '.join(status_indicators)}]" if status_indicators else ""
-                
                 # Calculate available space for commit message
-                fixed_len = len(prefix) + len(branch_info.name) + len(modified_indicator) + len(status_str) + len(separator) * 3 + len(relative_date) + len(branch_info.commit_hash)
+                fixed_len = len(prefix) + len(branch_info.name) + len(modified_indicator) + len(separator) * 3 + len(relative_date) + len(branch_info.commit_hash)
                 max_msg_len = width - fixed_len - 1
                 commit_msg = branch_info.commit_message
                 if len(commit_msg) > max_msg_len and max_msg_len > 3:
@@ -753,9 +742,6 @@ class GitBranchManager:
                     if modified_indicator:
                         stdscr.addstr(y, x_pos, modified_indicator)
                         x_pos += len(modified_indicator)
-                    if status_str:
-                        stdscr.addstr(y, x_pos, status_str)
-                        x_pos += len(status_str)
                     stdscr.addstr(y, x_pos, separator)
                     x_pos += len(separator)
                     stdscr.addstr(y, x_pos, relative_date)
@@ -790,19 +776,6 @@ class GitBranchManager:
                         stdscr.addstr(y, x_pos, modified_indicator)
                         stdscr.attroff(curses.color_pair(3))
                         x_pos += len(modified_indicator)
-                    
-                    # PR/merge status indicators
-                    if status_str:
-                        if branch_info.is_merged:
-                            stdscr.attron(curses.color_pair(5))  # Magenta for merged
-                        elif branch_info.has_open_pr:
-                            stdscr.attron(curses.color_pair(4))  # Cyan for PR
-                        stdscr.addstr(y, x_pos, status_str)
-                        if branch_info.is_merged:
-                            stdscr.attroff(curses.color_pair(5))
-                        elif branch_info.has_open_pr:
-                            stdscr.attroff(curses.color_pair(4))
-                        x_pos += len(status_str)
                     
                     stdscr.addstr(y, x_pos, separator)
                     x_pos += len(separator)
@@ -845,7 +818,7 @@ class GitBranchManager:
                 stdscr.refresh()
                 
                 # Reload branches
-                self.get_branches()
+                self.get_branches(stdscr)
                 
                 # Adjust selected index if needed
                 if self.selected_index >= len(self.filtered_branches):
@@ -871,7 +844,7 @@ class GitBranchManager:
                     stdscr.refresh()
                     
                     # Reload branches
-                    self.get_branches()
+                    self.get_branches(stdscr)
                     
                     stdscr.addstr(3, 0, "Press any key to continue...")
                 except subprocess.CalledProcessError as e:
@@ -886,12 +859,8 @@ class GitBranchManager:
                 stdscr.addstr(0, 0, "Reloading branches...")
                 stdscr.refresh()
                 
-                # Clear caches
-                self.pr_cache.clear()
-                self.main_branch = None
-                
                 # Reload branches
-                self.get_branches()
+                self.get_branches(stdscr)
                 
                 # Adjust selected index if needed
                 if self.selected_index >= len(self.filtered_branches):
@@ -973,13 +942,13 @@ class GitBranchManager:
                         stdscr.addstr(2, 0, "Press any key to continue...")
                         stdscr.refresh()
                         stdscr.getch()
-                        self.get_branches()  # Refresh branch list
+                        self.get_branches(stdscr)  # Refresh branch list
                         # Adjust selected index if needed
                         if self.selected_index >= len(self.filtered_branches):
                             self.selected_index = max(0, len(self.filtered_branches) - 1)
                     else:
                         stdscr.addstr(1, 0, f"Failed to delete branch '{selected_branch}'!")
-                        stdscr.addstr(2, 0, "The branch may have unmerged changes.")
+                        stdscr.addstr(2, 0, "The branch may have unpushed commits or is not fully merged.")
                         stdscr.addstr(3, 0, "Press any key to continue...")
                         stdscr.refresh()
                         stdscr.getch()
@@ -1015,7 +984,7 @@ class GitBranchManager:
                         stdscr.addstr(2, 0, "Press any key to continue...")
                         stdscr.refresh()
                         stdscr.getch()
-                        self.get_branches()  # Refresh branch list
+                        self.get_branches(stdscr)  # Refresh branch list
                         # Update current branch name if it was renamed
                         if selected_branch == self.current_branch:
                             self.current_branch = new_name
@@ -1085,7 +1054,7 @@ class GitBranchManager:
                             stdscr.addstr(3 if stashed else 2, 0, "Press any key to continue...")
                             stdscr.refresh()
                             stdscr.getch()
-                            self.get_branches()  # Refresh branch list
+                            self.get_branches(stdscr)  # Refresh branch list
                         else:
                             stdscr.addstr(2 if stashed else 1, 0, "Failed to checkout branch!")
                             stdscr.addstr(3 if stashed else 2, 0, "Press any key to continue...")
