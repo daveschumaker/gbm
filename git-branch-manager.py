@@ -24,6 +24,7 @@ class BranchInfo(NamedTuple):
     remote_name: Optional[str]
     has_upstream: bool  # True if branch exists on remote
     is_merged: bool  # True if branch has been merged into main/master
+    in_worktree: bool  # True if branch is checked out in a worktree
     
     def format_relative_date(self) -> str:
         """Format the commit date as a relative time string."""
@@ -360,7 +361,7 @@ class GitBranchManager:
         except subprocess.CalledProcessError:
             return None
     
-    def _get_batch_branch_info(self, branches: List[Tuple[str, bool, Optional[str]]]) -> Dict[str, Dict]:
+    def _get_batch_branch_info(self, branches: List[Tuple[str, bool, Optional[str]]], worktree_branches: set = None) -> Dict[str, Dict]:
         """Get branch info for multiple branches in a single git command."""
         if not branches:
             return {}
@@ -541,6 +542,7 @@ class GitBranchManager:
             
             # Collect all branch names first
             all_branches = []
+            worktree_branches = set()
             
             # Get local branches
             result = self._run_command(
@@ -556,6 +558,10 @@ class GitBranchManager:
                 branch_name = line.strip()
                 if branch_name.startswith('* '):
                     branch_name = branch_name[2:]
+                elif branch_name.startswith('+ '):
+                    # Branch checked out in a worktree
+                    branch_name = branch_name[2:]
+                    worktree_branches.add(branch_name)
                 all_branches.append((branch_name, False, None))  # (name, is_remote, remote_name)
             
             # Get remote branches if enabled
@@ -591,7 +597,7 @@ class GitBranchManager:
                         all_branches.append((branch_name, True, remote_name))
             
             # Get batch info for all branches
-            batch_info = self._get_batch_branch_info(all_branches)
+            batch_info = self._get_batch_branch_info(all_branches, worktree_branches)
             
             # Check uncommitted changes once for current branch
             has_uncommitted = False
@@ -641,7 +647,8 @@ class GitBranchManager:
                         is_remote=is_remote,
                         remote_name=remote_name,
                         has_upstream=has_upstream,
-                        is_merged=is_merged
+                        is_merged=is_merged,
+                        in_worktree=(branch_name in worktree_branches) if worktree_branches else False
                     )
                     self.branches.append(branch_info)
             
@@ -931,6 +938,7 @@ class GitBranchManager:
             ("  [modified] Uncommitted changes", 0),
             ("  [unpushed] Local branch not on remote", 0),
             ("  [merged]   Branch merged into main/master", 0),
+            ("  [worktree] Branch checked out in worktree", 0),
             ("", 0),
             ("Color Coding:", curses.A_BOLD),
             ("  Green      Current branch", 0),
@@ -1274,9 +1282,13 @@ class GitBranchManager:
                 merged_indicator = ""
                 if branch_info.is_merged and not branch_info.is_current and not branch_info.is_remote:
                     merged_indicator = " [merged]"
+                # Add worktree indicator
+                worktree_indicator = ""
+                if branch_info.in_worktree and not branch_info.is_current:
+                    worktree_indicator = " [worktree]"
                 
                 # Calculate available space for commit message
-                fixed_len = len(prefix) + len(branch_info.name) + len(modified_indicator) + len(unpushed_indicator) + len(merged_indicator) + len(separator) * 3 + len(relative_date) + len(branch_info.commit_hash)
+                fixed_len = len(prefix) + len(branch_info.name) + len(modified_indicator) + len(unpushed_indicator) + len(merged_indicator) + len(worktree_indicator) + len(separator) * 3 + len(relative_date) + len(branch_info.commit_hash)
                 max_msg_len = width - fixed_len - 1
                 commit_msg = branch_info.commit_message
                 if len(commit_msg) > max_msg_len and max_msg_len > 3:
@@ -1300,6 +1312,8 @@ class GitBranchManager:
                         x_pos = self.safe_addstr(stdscr, y, x_pos, unpushed_indicator)
                     if merged_indicator:
                         x_pos = self.safe_addstr(stdscr, y, x_pos, merged_indicator)
+                    if worktree_indicator:
+                        x_pos = self.safe_addstr(stdscr, y, x_pos, worktree_indicator)
                     x_pos = self.safe_addstr(stdscr, y, x_pos, separator)
                     x_pos = self.safe_addstr(stdscr, y, x_pos, relative_date)
                     x_pos = self.safe_addstr(stdscr, y, x_pos, separator)
@@ -1328,6 +1342,10 @@ class GitBranchManager:
                     # Merged indicator - use green color
                     if merged_indicator:
                         x_pos = self.safe_addstr(stdscr, y, x_pos, merged_indicator, curses.color_pair(2))
+                    
+                    # Worktree indicator - use cyan color
+                    if worktree_indicator:
+                        x_pos = self.safe_addstr(stdscr, y, x_pos, worktree_indicator, curses.color_pair(4))
                     
                     x_pos = self.safe_addstr(stdscr, y, x_pos, separator)
                     
