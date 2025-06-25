@@ -1760,6 +1760,17 @@ class GitBranchManager:
                     display_name = selected_branch.split('/', 1)[1]
                 
                 if selected_branch != self.current_branch:
+                    # Check if branch is checked out in a worktree
+                    if selected_branch_info.in_worktree:
+                        stdscr.clear()
+                        stdscr.addstr(0, 0, f"Cannot checkout branch '{selected_branch}'!")
+                        stdscr.addstr(1, 0, "This branch is already checked out in another worktree.")
+                        stdscr.addstr(2, 0, "")
+                        stdscr.addstr(3, 0, "Press any key to continue...")
+                        stdscr.refresh()
+                        stdscr.getch()
+                        continue
+                    
                     # Check if there are changes to stash
                     try:
                         status_result = self._run_command(
