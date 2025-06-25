@@ -189,7 +189,92 @@ class GitBranchManager:
                 return True
             except subprocess.CalledProcessError:
                 return False
+                
+    def move_branch(self, old_name: str, new_name: str) -> bool:
+        """Move/rename a branch."""
+        try:
+            subprocess.run(
+                ["git", "branch", "-m", old_name, new_name],
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            return True
+        except subprocess.CalledProcessError:
+            return False
             
+    def show_input_dialog(self, stdscr, prompt: str, initial_value: str = "") -> Optional[str]:
+        """Show an input dialog to get text from user."""
+        height, width = stdscr.getmaxyx()
+        
+        # Calculate dialog dimensions
+        dialog_width = min(60, width - 4)
+        dialog_height = 6
+        start_y = (height - dialog_height) // 2
+        start_x = (width - dialog_width) // 2
+        
+        # Create dialog window
+        dialog = curses.newwin(dialog_height, dialog_width, start_y, start_x)
+        dialog.box()
+        
+        # Add prompt
+        dialog.addstr(2, 2, prompt[:dialog_width - 4])
+        
+        # Create input field
+        input_y = 3
+        input_x = 2
+        input_width = dialog_width - 4
+        
+        # Initialize with initial value
+        user_input = initial_value
+        cursor_pos = len(user_input)
+        
+        # Enable cursor
+        curses.curs_set(1)
+        
+        while True:
+            # Display current input
+            dialog.move(input_y, input_x)
+            dialog.clrtoeol()
+            dialog.addstr(input_y, input_x, user_input[:input_width - 1])
+            
+            # Position cursor
+            if cursor_pos < input_width - 1:
+                dialog.move(input_y, input_x + cursor_pos)
+            
+            # Draw border again (clrtoeol might have erased it)
+            dialog.box()
+            dialog.addstr(2, 2, prompt[:dialog_width - 4])
+            
+            dialog.refresh()
+            
+            # Get key
+            key = dialog.getch()
+            
+            if key == ord('\n') or key == curses.KEY_ENTER:
+                curses.curs_set(0)  # Hide cursor
+                return user_input if user_input else None
+            elif key == 27:  # ESC
+                curses.curs_set(0)  # Hide cursor
+                return None
+            elif key == curses.KEY_BACKSPACE or key == 127:
+                if cursor_pos > 0:
+                    user_input = user_input[:cursor_pos-1] + user_input[cursor_pos:]
+                    cursor_pos -= 1
+            elif key == curses.KEY_LEFT:
+                if cursor_pos > 0:
+                    cursor_pos -= 1
+            elif key == curses.KEY_RIGHT:
+                if cursor_pos < len(user_input):
+                    cursor_pos += 1
+            elif key == curses.KEY_HOME:
+                cursor_pos = 0
+            elif key == curses.KEY_END:
+                cursor_pos = len(user_input)
+            elif 32 <= key <= 126:  # Printable characters
+                user_input = user_input[:cursor_pos] + chr(key) + user_input[cursor_pos:]
+                cursor_pos += 1
+    
     def show_confirmation_dialog(self, stdscr, message: str) -> Optional[str]:
         """Show a confirmation dialog with yes/no/cancel options."""
         height, width = stdscr.getmaxyx()
@@ -249,7 +334,7 @@ class GitBranchManager:
             height, width = stdscr.getmaxyx()
             
             # Header
-            header = "Git Branch Manager - ↑/↓ navigate, Enter checkout, Shift+D delete, q/ESC quit"
+            header = "Git Branch Manager - ↑/↓ navigate, Enter checkout, D delete, M rename, q quit"
             stdscr.addstr(0, 0, header[:width-1])
             stdscr.addstr(1, 0, "-" * min(len(header), width-1))
             
@@ -346,6 +431,45 @@ class GitBranchManager:
                         stdscr.addstr(1, 0, f"Failed to delete branch '{selected_branch}'!")
                         stdscr.addstr(2, 0, "The branch may have unmerged changes.")
                         stdscr.addstr(3, 0, "Press any key to continue...")
+                        stdscr.refresh()
+                        stdscr.getch()
+            elif key == ord('M'):  # Shift+M for move/rename
+                selected_branch = self.branches[self.selected_index].name
+                
+                # Get new name from user
+                new_name = self.show_input_dialog(
+                    stdscr,
+                    f"Rename branch '{selected_branch}' to:",
+                    selected_branch
+                )
+                
+                if new_name and new_name != selected_branch:
+                    # Check if new name already exists
+                    existing_names = [b.name for b in self.branches]
+                    if new_name in existing_names:
+                        stdscr.clear()
+                        stdscr.addstr(0, 0, f"Branch '{new_name}' already exists!")
+                        stdscr.addstr(1, 0, "Press any key to continue...")
+                        stdscr.refresh()
+                        stdscr.getch()
+                        continue
+                    
+                    stdscr.clear()
+                    stdscr.addstr(0, 0, f"Renaming branch '{selected_branch}' to '{new_name}'...")
+                    stdscr.refresh()
+                    
+                    if self.move_branch(selected_branch, new_name):
+                        stdscr.addstr(1, 0, f"Successfully renamed branch to '{new_name}'")
+                        stdscr.addstr(2, 0, "Press any key to continue...")
+                        stdscr.refresh()
+                        stdscr.getch()
+                        self.get_branches()  # Refresh branch list
+                        # Update current branch name if it was renamed
+                        if selected_branch == self.current_branch:
+                            self.current_branch = new_name
+                    else:
+                        stdscr.addstr(1, 0, f"Failed to rename branch!")
+                        stdscr.addstr(2, 0, "Press any key to continue...")
                         stdscr.refresh()
                         stdscr.getch()
             elif key == ord('\n') or key == curses.KEY_ENTER:
