@@ -853,6 +853,27 @@ class GitBranchManager:
             elif key == ord('?'):  # Show help
                 self.show_help(stdscr)
             elif key == ord('t') or key == ord('T'):  # Toggle remote branches
+                # Fetch from remote before toggling
+                if not self.show_remotes:  # Only fetch when turning remotes ON
+                    stdscr.clear()
+                    stdscr.addstr(0, 0, "Fetching from remote...")
+                    stdscr.refresh()
+                    
+                    try:
+                        self._run_command(
+                            ["git", "fetch", "--all"],
+                            capture_output=True,
+                            text=True,
+                            check=True
+                        )
+                    except subprocess.CalledProcessError as e:
+                        stdscr.clear()
+                        stdscr.addstr(0, 0, f"Fetch failed: {e}")
+                        stdscr.addstr(1, 0, "Press any key to continue...")
+                        stdscr.refresh()
+                        stdscr.getch()
+                        continue
+                
                 self.show_remotes = not self.show_remotes
                 # Reload branches with loading message
                 self.get_branches(stdscr)
