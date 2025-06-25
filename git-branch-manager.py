@@ -19,6 +19,8 @@ class BranchInfo(NamedTuple):
     is_merged: bool
     has_open_pr: bool
     pr_number: Optional[int]
+    is_remote: bool
+    remote_name: Optional[str]
     
     def format_relative_date(self) -> str:
         """Format the commit date as a relative time string."""
@@ -54,13 +56,29 @@ class GitBranchManager:
         self.main_branch: Optional[str] = None
         self.gh_available: bool = self._check_gh_cli()
         self.pr_cache: dict = {}  # Cache PR lookups for performance
+        self.show_remotes: bool = False  # Toggle for showing remote branches
         
     def _check_gh_cli(self) -> bool:
-        """Check if gh CLI is available."""
+        """Check if gh CLI is available and this is a GitHub repo."""
+        # First check if gh is installed
         try:
             subprocess.run(["gh", "--version"], capture_output=True, check=True)
-            return True
         except (subprocess.CalledProcessError, FileNotFoundError):
+            return False
+            
+        # Then check if this is a GitHub repository
+        try:
+            result = subprocess.run(
+                ["git", "remote", "get-url", "origin"],
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            remote_url = result.stdout.strip().lower()
+            # Check for github.com in the URL (works for HTTPS and SSH)
+            return "github.com" in remote_url
+        except subprocess.CalledProcessError:
+            # No origin remote, PR detection won't work anyway
             return False
     
     def _get_main_branch(self) -> str:
@@ -138,7 +156,7 @@ class GitBranchManager:
             self.pr_cache[branch] = (False, None)
             return False, None
     
-    def get_branch_info(self, branch: str) -> Optional[BranchInfo]:
+    def get_branch_info(self, branch: str, is_remote: bool = False, remote_name: Optional[str] = None) -> Optional[BranchInfo]:
         """Get commit info for a specific branch."""
         try:
             # Get commit hash, date, and message
@@ -168,9 +186,14 @@ class GitBranchManager:
                         )
                         has_uncommitted_changes = bool(status_result.stdout.strip())
                     
-                    # Check merge and PR status
-                    is_merged = self._check_if_merged(branch)
-                    has_open_pr, pr_number = self._get_pr_info(branch)
+                    # Check merge and PR status (only for local branches)
+                    is_merged = False
+                    has_open_pr = False
+                    pr_number = None
+                    
+                    if not is_remote:
+                        is_merged = self._check_if_merged(branch)
+                        has_open_pr, pr_number = self._get_pr_info(branch)
                     
                     return BranchInfo(
                         name=branch,
@@ -181,7 +204,9 @@ class GitBranchManager:
                         has_uncommitted_changes=has_uncommitted_changes,
                         is_merged=is_merged,
                         has_open_pr=has_open_pr,
-                        pr_number=pr_number
+                        pr_number=pr_number,
+                        is_remote=is_remote,
+                        remote_name=remote_name
                     )
             return None
             
@@ -189,7 +214,7 @@ class GitBranchManager:
             return None
     
     def get_branches(self) -> None:
-        """Get list of local git branches with commit info."""
+        """Get list of git branches with commit info."""
         try:
             # First get the current branch
             current_result = subprocess.run(
@@ -200,7 +225,9 @@ class GitBranchManager:
             )
             self.current_branch = current_result.stdout.strip()
             
-            # Get all branches
+            self.branches = []
+            
+            # Get local branches
             result = subprocess.run(
                 ["git", "branch"],
                 capture_output=True,
@@ -208,8 +235,7 @@ class GitBranchManager:
                 check=True
             )
             
-            lines = result.stdout.strip().split('\n')
-            self.branches = []
+            lines = result.stdout.strip().split('\n') if result.stdout.strip() else []
             
             for line in lines:
                 branch_name = line.strip()
@@ -219,6 +245,38 @@ class GitBranchManager:
                 branch_info = self.get_branch_info(branch_name)
                 if branch_info:
                     self.branches.append(branch_info)
+            
+            # Get remote branches if enabled
+            if self.show_remotes:
+                remote_result = subprocess.run(
+                    ["git", "branch", "-r"],
+                    capture_output=True,
+                    text=True,
+                    check=True
+                )
+                
+                remote_lines = remote_result.stdout.strip().split('\n') if remote_result.stdout.strip() else []
+                
+                for line in remote_lines:
+                    branch_name = line.strip()
+                    # Skip HEAD pointer
+                    if '->' in branch_name:
+                        continue
+                    
+                    # Parse remote/branch format
+                    if '/' in branch_name:
+                        parts = branch_name.split('/', 1)
+                        remote_name = parts[0]
+                        branch_short_name = parts[1]
+                        
+                        # Skip if this branch exists locally
+                        local_exists = any(b.name == branch_short_name and not b.is_remote for b in self.branches)
+                        if local_exists:
+                            continue
+                        
+                        branch_info = self.get_branch_info(branch_name, is_remote=True, remote_name=remote_name)
+                        if branch_info:
+                            self.branches.append(branch_info)
                     
         except subprocess.CalledProcessError as e:
             print(f"Error getting branches: {e}")
@@ -250,15 +308,44 @@ class GitBranchManager:
             print(f"Error stashing changes: {e}")
             return False
             
-    def checkout_branch(self, branch: str) -> bool:
+    def checkout_branch(self, branch: str, is_remote: bool = False) -> bool:
         """Checkout the specified branch."""
         try:
-            subprocess.run(
-                ["git", "checkout", branch],
-                capture_output=True,
-                text=True,
-                check=True
-            )
+            if is_remote and '/' in branch:
+                # For remote branches, create a local tracking branch
+                parts = branch.split('/', 1)
+                local_branch_name = parts[1]
+                
+                # Check if local branch already exists
+                check_result = subprocess.run(
+                    ["git", "rev-parse", "--verify", local_branch_name],
+                    capture_output=True,
+                    check=False
+                )
+                
+                if check_result.returncode == 0:
+                    # Local branch exists, just check it out
+                    subprocess.run(
+                        ["git", "checkout", local_branch_name],
+                        capture_output=True,
+                        text=True,
+                        check=True
+                    )
+                else:
+                    # Create new tracking branch
+                    subprocess.run(
+                        ["git", "checkout", "-b", local_branch_name, branch],
+                        capture_output=True,
+                        text=True,
+                        check=True
+                    )
+            else:
+                subprocess.run(
+                    ["git", "checkout", branch],
+                    capture_output=True,
+                    text=True,
+                    check=True
+                )
             return True
         except subprocess.CalledProcessError as e:
             print(f"Error checking out branch {branch}: {e}")
@@ -393,11 +480,14 @@ class GitBranchManager:
             ("", 0),
             ("View Options:", curses.A_BOLD),
             ("  r          Reload branch list", 0),
+            ("  t          Toggle remote branches", 0),
+            ("  f          Fetch latest from remote", 0),
             ("", 0),
             ("Status Indicators:", curses.A_BOLD),
             ("  *          Current branch", 0),
+            ("  ↓          Remote branch", 0),
             ("  [modified] Uncommitted changes", 0),
-            ("  [PR#123]   Has open pull request", 0),
+            ("  [PR#123]   Has open pull request (GitHub only)", 0),
             ("  [merged]   Merged into main branch", 0),
             ("", 0),
             ("Color Coding:", curses.A_BOLD),
@@ -413,13 +503,14 @@ class GitBranchManager:
         
         # Display help text
         start_y = max(0, (height - len(help_text)) // 2)
+        start_x = max(5, (width - 60) // 2)  # Left margin of 5, or centered if narrow screen
+        
         for i, (text, attr) in enumerate(help_text):
             if start_y + i < height - 1:
-                x = max(0, (width - len(text)) // 2)
                 try:
                     if attr:
                         stdscr.attron(attr)
-                    stdscr.addstr(start_y + i, x, text[:width-1])
+                    stdscr.addstr(start_y + i, start_x, text[:width - start_x - 1])
                     if attr:
                         stdscr.attroff(attr)
                 except curses.error:
@@ -494,6 +585,8 @@ class GitBranchManager:
             
             # Header
             header = "Git Branch Manager - Press ? for help"
+            if self.show_remotes:
+                header += " [REMOTES ON]"
             stdscr.addstr(0, 0, header[:width-1])
             stdscr.addstr(1, 0, "-" * min(len(header), width-1))
             
@@ -516,7 +609,12 @@ class GitBranchManager:
                 y = start_y + i
                 
                 # Prepare display components
-                prefix = "* " if branch_info.is_current else "  "
+                if branch_info.is_current:
+                    prefix = "* "
+                elif branch_info.is_remote:
+                    prefix = "↓ "  # Down arrow for remote branches
+                else:
+                    prefix = "  "
                 relative_date = branch_info.format_relative_date()
                 
                 # Determine age-based color for branch
@@ -646,6 +744,49 @@ class GitBranchManager:
                 break
             elif key == ord('?'):  # Show help
                 self.show_help(stdscr)
+            elif key == ord('t') or key == ord('T'):  # Toggle remote branches
+                self.show_remotes = not self.show_remotes
+                stdscr.clear()
+                stdscr.addstr(0, 0, f"Remote branches: {'ON' if self.show_remotes else 'OFF'}")
+                stdscr.addstr(1, 0, "Loading branches...")
+                stdscr.refresh()
+                
+                # Reload branches
+                self.get_branches()
+                
+                # Adjust selected index if needed
+                if self.selected_index >= len(self.branches):
+                    self.selected_index = max(0, len(self.branches) - 1)
+                    
+                stdscr.addstr(2, 0, "Press any key to continue...")
+                stdscr.refresh()
+                stdscr.getch()
+            elif key == ord('f') or key == ord('F'):  # Fetch from remote
+                stdscr.clear()
+                stdscr.addstr(0, 0, "Fetching from remote...")
+                stdscr.refresh()
+                
+                try:
+                    result = subprocess.run(
+                        ["git", "fetch", "--all"],
+                        capture_output=True,
+                        text=True,
+                        check=True
+                    )
+                    stdscr.addstr(1, 0, "Fetch complete!")
+                    stdscr.addstr(2, 0, "Reloading branches...")
+                    stdscr.refresh()
+                    
+                    # Reload branches
+                    self.get_branches()
+                    
+                    stdscr.addstr(3, 0, "Press any key to continue...")
+                except subprocess.CalledProcessError as e:
+                    stdscr.addstr(1, 0, f"Fetch failed: {e}")
+                    stdscr.addstr(2, 0, "Press any key to continue...")
+                
+                stdscr.refresh()
+                stdscr.getch()
             elif key == ord('r') or key == ord('R'):  # Reload
                 # Show loading message
                 stdscr.clear()
@@ -750,7 +891,14 @@ class GitBranchManager:
                         stdscr.refresh()
                         stdscr.getch()
             elif key == ord('\n') or key == curses.KEY_ENTER:
-                selected_branch = self.branches[self.selected_index].name
+                selected_branch_info = self.branches[self.selected_index]
+                selected_branch = selected_branch_info.name
+                
+                # For remote branches, show the local name that will be created
+                display_name = selected_branch
+                if selected_branch_info.is_remote and '/' in selected_branch:
+                    display_name = selected_branch.split('/', 1)[1]
+                
                 if selected_branch != self.current_branch:
                     # Check if there are changes to stash
                     try:
@@ -768,7 +916,7 @@ class GitBranchManager:
                             # Show confirmation dialog
                             response = self.show_confirmation_dialog(
                                 stdscr,
-                                f"You have uncommitted changes.\nStash them before switching to '{selected_branch}'?"
+                                f"You have uncommitted changes.\nStash them before switching to '{display_name}'?"
                             )
                             
                             if response == 'cancel':
@@ -785,7 +933,10 @@ class GitBranchManager:
                             # If 'no', proceed without stashing
                         
                         stdscr.clear()
-                        stdscr.addstr(0, 0, f"Switching to branch '{selected_branch}'...")
+                        if selected_branch_info.is_remote:
+                            stdscr.addstr(0, 0, f"Creating local branch '{display_name}' from '{selected_branch}'...")
+                        else:
+                            stdscr.addstr(0, 0, f"Switching to branch '{selected_branch}'...")
                         stdscr.refresh()
                         
                         if stashed:
@@ -793,8 +944,8 @@ class GitBranchManager:
                             stdscr.refresh()
                         
                         # Checkout branch
-                        if self.checkout_branch(selected_branch):
-                            stdscr.addstr(2 if stashed else 1, 0, f"Successfully checked out '{selected_branch}'")
+                        if self.checkout_branch(selected_branch, selected_branch_info.is_remote):
+                            stdscr.addstr(2 if stashed else 1, 0, f"Successfully checked out '{display_name}'")
                             stdscr.addstr(3 if stashed else 2, 0, "Press any key to continue...")
                             stdscr.refresh()
                             stdscr.getch()
