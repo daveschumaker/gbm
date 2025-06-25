@@ -459,6 +459,33 @@ class GitBranchManager:
         
         return remote_branches
     
+    def _get_branch_stashes(self, branch_name: str) -> List[Tuple[str, str]]:
+        """Get stashes that were created from the specified branch.
+        Returns list of (stash_ref, stash_message) tuples."""
+        stashes = []
+        try:
+            # Get all stashes with their branch info
+            result = self._run_command(
+                ["git", "stash", "list", "--format=%gd|%s"],
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            
+            if result.stdout.strip():
+                for line in result.stdout.strip().split('\n'):
+                    if '|' in line:
+                        stash_ref, message = line.split('|', 1)
+                        # Check if this stash was created from the target branch
+                        # Stash messages typically include: "WIP on branch_name: ..."
+                        if f"WIP on {branch_name}:" in message or f"On {branch_name}:" in message:
+                            stashes.append((stash_ref, message))
+            
+        except subprocess.CalledProcessError:
+            pass
+        
+        return stashes
+    
     def _get_merged_branches_set(self, base_branch: str) -> set:
         """Get a set of all branch names that have been merged into the base branch."""
         merged_branches = set()
@@ -916,6 +943,7 @@ class GitBranchManager:
             ("", 0),
             ("Stash Management:", curses.A_BOLD),
             ("  S          Pop last stash (if available)", 0),
+            ("  Auto-detect Branch stashes detected when switching branches", 0),
             ("", 0),
             ("View Options:", curses.A_BOLD),
             ("  r          Reload branch list", 0),
@@ -1806,6 +1834,45 @@ class GitBranchManager:
                         # Checkout branch
                         if self.checkout_branch(selected_branch, selected_branch_info.is_remote):
                             self.get_branches(stdscr)  # Refresh branch list
+                            
+                            # Check if the newly checked out branch has any stashes
+                            branch_stashes = self._get_branch_stashes(self.current_branch)
+                            if branch_stashes:
+                                # Show the most recent stash for this branch
+                                most_recent_stash = branch_stashes[0]
+                                stash_ref, stash_message = most_recent_stash
+                                
+                                stdscr.clear()
+                                stdscr.addstr(0, 0, f"Found {len(branch_stashes)} stash{'es' if len(branch_stashes) > 1 else ''} for branch '{self.current_branch}':")
+                                stdscr.addstr(1, 0, "")
+                                stdscr.addstr(2, 0, f"Most recent: {stash_message}")
+                                stdscr.addstr(3, 0, "")
+                                stdscr.addstr(4, 0, "Apply this stash? (y/n)")
+                                stdscr.refresh()
+                                
+                                key = stdscr.getch()
+                                if key in [ord('y'), ord('Y')]:
+                                    try:
+                                        self._run_command(
+                                            ["git", "stash", "pop", stash_ref],
+                                            capture_output=True,
+                                            text=True,
+                                            check=True
+                                        )
+                                        stdscr.clear()
+                                        stdscr.addstr(0, 0, "Stash applied successfully!")
+                                        stdscr.addstr(1, 0, "Press any key to continue...")
+                                        stdscr.refresh()
+                                        stdscr.getch()
+                                        # Refresh to show modified status
+                                        self.get_branches(stdscr)
+                                    except subprocess.CalledProcessError as e:
+                                        stdscr.clear()
+                                        stdscr.addstr(0, 0, "Failed to apply stash!")
+                                        stdscr.addstr(1, 0, f"Error: {e}")
+                                        stdscr.addstr(2, 0, "Press any key to continue...")
+                                        stdscr.refresh()
+                                        stdscr.getch()
                         else:
                             stdscr.clear()
                             stdscr.addstr(0, 0, "Failed to checkout branch!")
