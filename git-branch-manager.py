@@ -22,6 +22,7 @@ class BranchInfo(NamedTuple):
     has_uncommitted_changes: bool
     is_remote: bool
     remote_name: Optional[str]
+    has_upstream: bool  # True if branch exists on remote
     
     def format_relative_date(self) -> str:
         """Format the commit date as a relative time string."""
@@ -427,6 +428,33 @@ class GitBranchManager:
         except subprocess.CalledProcessError:
             return False
     
+    def _get_remote_branches_set(self) -> set:
+        """Get a set of all branch names that exist on any remote."""
+        remote_branches = set()
+        try:
+            result = self._run_command(
+                ["git", "branch", "-r"],
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            
+            for line in result.stdout.strip().split('\n'):
+                if line.strip():
+                    branch = line.strip()
+                    # Skip HEAD pointer
+                    if '->' in branch:
+                        continue
+                    # Extract just the branch name (remove remote prefix)
+                    if '/' in branch:
+                        branch_name = branch.split('/', 1)[1]
+                        remote_branches.add(branch_name)
+            
+        except subprocess.CalledProcessError:
+            pass
+        
+        return remote_branches
+    
     def safe_addstr(self, stdscr, y: int, x: int, text: str, attr: int = 0) -> int:
         """Safely add string to screen, truncating if necessary. Returns new x position."""
         height, width = stdscr.getmaxyx()
@@ -542,10 +570,21 @@ class GitBranchManager:
             if self.current_branch:
                 has_uncommitted = self._check_uncommitted_changes_batch()
             
+            # Get set of branches that exist on remote
+            remote_branch_names = self._get_remote_branches_set()
+            
             # Build BranchInfo objects
             for branch_name, is_remote, remote_name in all_branches:
                 if branch_name in batch_info:
                     info = batch_info[branch_name]
+                    
+                    # For local branches, check if they exist on remote
+                    # For remote branches, they obviously have upstream
+                    if is_remote:
+                        has_upstream = True
+                    else:
+                        # Check if this local branch exists on any remote
+                        has_upstream = branch_name in remote_branch_names
                     
                     branch_info = BranchInfo(
                         name=branch_name,
@@ -556,7 +595,8 @@ class GitBranchManager:
                         commit_author=info['author'],
                         has_uncommitted_changes=(has_uncommitted if branch_name == self.current_branch else False),
                         is_remote=is_remote,
-                        remote_name=remote_name
+                        remote_name=remote_name,
+                        has_upstream=has_upstream
                     )
                     self.branches.append(branch_info)
             
@@ -836,6 +876,7 @@ class GitBranchManager:
             ("  *          Current branch", 0),
             ("  ↓          Remote branch", 0),
             ("  [modified] Uncommitted changes", 0),
+            ("  [unpushed] Local branch not on remote", 0),
             ("", 0),
             ("Color Coding:", curses.A_BOLD),
             ("  Green      Current branch", 0),
@@ -1169,9 +1210,13 @@ class GitBranchManager:
                 # Prepare status indicators
                 separator = " • "
                 modified_indicator = " [modified]" if branch_info.has_uncommitted_changes else ""
+                # Add unpushed indicator for local branches
+                unpushed_indicator = ""
+                if not branch_info.is_remote and not branch_info.has_upstream:
+                    unpushed_indicator = " [unpushed]"
                 
                 # Calculate available space for commit message
-                fixed_len = len(prefix) + len(branch_info.name) + len(modified_indicator) + len(separator) * 3 + len(relative_date) + len(branch_info.commit_hash)
+                fixed_len = len(prefix) + len(branch_info.name) + len(modified_indicator) + len(unpushed_indicator) + len(separator) * 3 + len(relative_date) + len(branch_info.commit_hash)
                 max_msg_len = width - fixed_len - 1
                 commit_msg = branch_info.commit_message
                 if len(commit_msg) > max_msg_len and max_msg_len > 3:
@@ -1191,6 +1236,8 @@ class GitBranchManager:
                     x_pos = self.safe_addstr(stdscr, y, x_pos, branch_info.name)
                     if modified_indicator:
                         x_pos = self.safe_addstr(stdscr, y, x_pos, modified_indicator)
+                    if unpushed_indicator:
+                        x_pos = self.safe_addstr(stdscr, y, x_pos, unpushed_indicator)
                     x_pos = self.safe_addstr(stdscr, y, x_pos, separator)
                     x_pos = self.safe_addstr(stdscr, y, x_pos, relative_date)
                     x_pos = self.safe_addstr(stdscr, y, x_pos, separator)
@@ -1211,6 +1258,10 @@ class GitBranchManager:
                     # Modified indicator
                     if modified_indicator:
                         x_pos = self.safe_addstr(stdscr, y, x_pos, modified_indicator, curses.color_pair(3))
+                    
+                    # Unpushed indicator
+                    if unpushed_indicator:
+                        x_pos = self.safe_addstr(stdscr, y, x_pos, unpushed_indicator, curses.color_pair(3))
                     
                     x_pos = self.safe_addstr(stdscr, y, x_pos, separator)
                     
@@ -1510,6 +1561,18 @@ class GitBranchManager:
                 
                 selected_branch_info = self.filtered_branches[self.selected_index]
                 selected_branch = selected_branch_info.name
+                
+                # Check if branch has been pushed
+                if not selected_branch_info.is_remote and not selected_branch_info.has_upstream:
+                    stdscr.clear()
+                    stdscr.addstr(0, 0, f"Branch '{selected_branch}' has not been pushed to remote!")
+                    stdscr.addstr(1, 0, "Push the branch first before opening in browser.")
+                    stdscr.addstr(2, 0, "")
+                    stdscr.addstr(3, 0, "Press any key to continue...")
+                    stdscr.refresh()
+                    stdscr.getch()
+                    continue
+                
                 # For remote branches, strip the remote prefix (e.g., origin/)
                 if selected_branch_info.is_remote and '/' in selected_branch:
                     branch_name = selected_branch.split('/', 1)[1]
@@ -1555,6 +1618,18 @@ class GitBranchManager:
                 
                 selected_branch_info = self.filtered_branches[self.selected_index]
                 selected_branch = selected_branch_info.name
+                
+                # Check if branch has been pushed
+                if not selected_branch_info.is_remote and not selected_branch_info.has_upstream:
+                    stdscr.clear()
+                    stdscr.addstr(0, 0, f"Branch '{selected_branch}' has not been pushed to remote!")
+                    stdscr.addstr(1, 0, "Push the branch first before opening in browser.")
+                    stdscr.addstr(2, 0, "")
+                    stdscr.addstr(3, 0, "Press any key to continue...")
+                    stdscr.refresh()
+                    stdscr.getch()
+                    continue
+                
                 # For remote branches, strip the remote prefix (e.g., origin/)
                 if selected_branch_info.is_remote and '/' in selected_branch:
                     branch_name = selected_branch.split('/', 1)[1]
