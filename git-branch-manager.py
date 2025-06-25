@@ -460,7 +460,7 @@ class GitBranchManager:
         return remote_branches
     
     def _get_branch_stashes(self, branch_name: str) -> List[Tuple[str, str]]:
-        """Get stashes that were created from the specified branch.
+        """Get stashes that were created by git-branch-manager from the specified branch.
         Returns list of (stash_ref, stash_message) tuples."""
         stashes = []
         try:
@@ -476,9 +476,9 @@ class GitBranchManager:
                 for line in result.stdout.strip().split('\n'):
                     if '|' in line:
                         stash_ref, message = line.split('|', 1)
-                        # Check if this stash was created from the target branch
-                        # Stash messages typically include: "WIP on branch_name: ..."
-                        if f"WIP on {branch_name}:" in message or f"On {branch_name}:" in message:
+                        # Only match stashes created by git-branch-manager
+                        # Format: "On branch_name: Stashed by git-branch-manager"
+                        if f"On {branch_name}: Stashed by git-branch-manager" in message:
                             stashes.append((stash_ref, message))
             
         except subprocess.CalledProcessError:
@@ -1843,7 +1843,7 @@ class GitBranchManager:
                                 stash_ref, stash_message = most_recent_stash
                                 
                                 stdscr.clear()
-                                stdscr.addstr(0, 0, f"Found {len(branch_stashes)} stash{'es' if len(branch_stashes) > 1 else ''} for branch '{self.current_branch}':")
+                                stdscr.addstr(0, 0, f"Found {len(branch_stashes)} git-branch-manager stash{'es' if len(branch_stashes) > 1 else ''} for branch '{self.current_branch}':")
                                 stdscr.addstr(1, 0, "")
                                 stdscr.addstr(2, 0, f"Most recent: {stash_message}")
                                 stdscr.addstr(3, 0, "")
