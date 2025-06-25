@@ -13,7 +13,10 @@ Git Branch Manager is a terminal-based (TUI) Git branch management tool written 
 - **Branch Operations**: Checkout, delete, rename branches
 - **Visual Indicators**: Current branch (*), remote branches (↓), modified files
 - **Stash Management**: Automatic prompt to stash changes when switching branches
+- **Stash Recovery**: Track and recover last stash with 'S' key
 - **Remote Branch Support**: Toggle viewing and checkout remote branches
+- **Branch Creation**: Create new branches with 'N' key
+- **Branch Protection**: Extra confirmation for deleting main/master branches
 - **Performance Optimized**: Uses batch operations for fast loading in large repos
 
 ### Advanced Features
@@ -73,8 +76,10 @@ Git Branch Manager is a terminal-based (TUI) Git branch management tool written 
 ### Key Bindings
 - `↑/↓`: Navigate branches
 - `Enter`: Checkout selected branch
-- `D`: Delete branch (with confirmation)
+- `D`: Delete branch (with confirmation, protected branches need extra confirmation)
 - `M`: Move/rename branch (with input dialog)
+- `N`: Create new branch from current (with optional checkout)
+- `S`: Pop last stash (if available)
 - `t`: Toggle remote branches
 - `f`: Fetch from remote
 - `r`: Reload branch list
@@ -90,6 +95,7 @@ Git Branch Manager is a terminal-based (TUI) Git branch management tool written 
 ### Visual Elements
 - **Prefixes**: `*` (current), `↓` (remote), `  ` (local)
 - **Status Tags**: `[modified]` for uncommitted changes
+- **Header Indicators**: `[Stash: stash@{0}]` when a stash is available to pop
 - **Colors**: 
   - Green: Current branch
   - Cyan: Branch names
@@ -138,10 +144,16 @@ Git Branch Manager is a terminal-based (TUI) Git branch management tool written 
 - Remote branch operations require network access
 - Very long branch names may be truncated in narrow terminals
 
+## Recent Features Added
+- **Stash Tracking**: The app now tracks the last stash it creates and shows it in the header
+- **Stash Recovery**: Press 'S' to pop the last stash created by the app
+- **Branch Protection**: Main and master branches require extra confirmation before deletion
+- **Branch Creation**: Press 'N' to create a new branch with optional checkout
+
 ## Future Enhancement Ideas
 - Multiple selection for bulk operations
 - Branch graph visualization
-- Config file for preferences (e.g., to re-enable merge/PR checks)
+- Config file for preferences (e.g., to re-enable merge/PR checks, customize protected branches)
 - Undo functionality
 - Export branch list
 
@@ -180,4 +192,8 @@ git branch -d <branch>              # Delete branch
 git branch -m <old> <new>           # Rename branch
 git status --porcelain              # Check for uncommitted changes
 git stash push -m "message"         # Stash changes
+git stash list -1                   # Get last stash reference
+git stash pop stash@{0}             # Pop specific stash
+git branch <name>                   # Create new branch
+git checkout -b <name>              # Create and checkout new branch
 ```

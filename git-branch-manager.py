@@ -61,6 +61,8 @@ class GitBranchManager:
         self.age_filter: bool = False  # Hide old branches (>3 months)
         self.prefix_filter: str = ""  # Filter by prefix
         self.current_user: Optional[str] = self._get_current_user()
+        self.last_stash_ref: Optional[str] = None  # Track last stash created
+        self.protected_branches: List[str] = ["main", "master"]  # Protected branches
         
     def has_active_filters(self) -> bool:
         """Check if any filters are currently active."""
@@ -405,12 +407,23 @@ class GitBranchManager:
             
             if status_result.stdout.strip():
                 # There are changes, stash them
-                self._run_command(
+                stash_result = self._run_command(
                     ["git", "stash", "push", "-m", "Stashed by git-branch-manager"],
                     capture_output=True,
                     text=True,
                     check=True
                 )
+                # Extract stash reference from output
+                if "Saved working directory" in stash_result.stdout:
+                    # Get the stash reference (usually stash@{0})
+                    stash_list = self._run_command(
+                        ["git", "stash", "list", "-1"],
+                        capture_output=True,
+                        text=True,
+                        check=True
+                    )
+                    if stash_list.stdout:
+                        self.last_stash_ref = stash_list.stdout.split(':')[0]
                 return True
             return False
             
@@ -588,6 +601,10 @@ class GitBranchManager:
             ("  Enter      Checkout selected branch", 0),
             ("  D          Delete selected branch", 0),
             ("  M          Rename/move selected branch", 0),
+            ("  N          Create new branch from current", 0),
+            ("", 0),
+            ("Stash Management:", curses.A_BOLD),
+            ("  S          Pop last stash (if available)", 0),
             ("", 0),
             ("View Options:", curses.A_BOLD),
             ("  r          Reload branch list", 0),
@@ -703,6 +720,8 @@ class GitBranchManager:
             header = "Git Branch Manager - Press ? for help"
             if self.show_remotes:
                 header += " [REMOTES ON]"
+            if self.last_stash_ref:
+                header += f" [Stash: {self.last_stash_ref}]"
             
             # Add active filter indicators
             filters = []
@@ -900,6 +919,90 @@ class GitBranchManager:
                     self.selected_index = 0  # Reset to first result
             elif key == ord('c') or key == ord('C'):  # Clear filters
                 self.clear_all_filters()
+            elif key == ord('S'):  # Pop stash
+                if self.last_stash_ref:
+                    stdscr.clear()
+                    stdscr.addstr(0, 0, f"Popping stash {self.last_stash_ref}...")
+                    stdscr.refresh()
+                    
+                    try:
+                        self._run_command(
+                            ["git", "stash", "pop", self.last_stash_ref],
+                            capture_output=True,
+                            text=True,
+                            check=True
+                        )
+                        self.last_stash_ref = None  # Clear the reference
+                        # Reload branches to update modified status
+                        self.get_branches(stdscr)
+                    except subprocess.CalledProcessError as e:
+                        stdscr.clear()
+                        stdscr.addstr(0, 0, f"Failed to pop stash: {e}")
+                        stdscr.addstr(1, 0, "Press any key to continue...")
+                        stdscr.refresh()
+                        stdscr.getch()
+                else:
+                    stdscr.clear()
+                    stdscr.addstr(0, 0, "No stash to pop.")
+                    stdscr.addstr(1, 0, "Press any key to continue...")
+                    stdscr.refresh()
+                    stdscr.getch()
+            elif key == ord('N'):  # Create new branch
+                # Get new branch name from user
+                new_branch_name = self.show_input_dialog(
+                    stdscr,
+                    "Enter new branch name:"
+                )
+                
+                if new_branch_name:
+                    # Check if branch already exists
+                    existing_names = [b.name for b in self.branches]
+                    if new_branch_name in existing_names:
+                        stdscr.clear()
+                        stdscr.addstr(0, 0, f"Branch '{new_branch_name}' already exists!")
+                        stdscr.addstr(1, 0, "Press any key to continue...")
+                        stdscr.refresh()
+                        stdscr.getch()
+                        continue
+                    
+                    # Ask if user wants to checkout the new branch
+                    response = self.show_confirmation_dialog(
+                        stdscr,
+                        f"Create branch '{new_branch_name}'?\nAlso checkout the new branch?"
+                    )
+                    
+                    if response == 'yes':
+                        # Create and checkout
+                        try:
+                            self._run_command(
+                                ["git", "checkout", "-b", new_branch_name],
+                                capture_output=True,
+                                text=True,
+                                check=True
+                            )
+                            self.get_branches(stdscr)  # Refresh branch list
+                        except subprocess.CalledProcessError as e:
+                            stdscr.clear()
+                            stdscr.addstr(0, 0, f"Failed to create branch: {e}")
+                            stdscr.addstr(1, 0, "Press any key to continue...")
+                            stdscr.refresh()
+                            stdscr.getch()
+                    elif response == 'no':
+                        # Create without checkout
+                        try:
+                            self._run_command(
+                                ["git", "branch", new_branch_name],
+                                capture_output=True,
+                                text=True,
+                                check=True
+                            )
+                            self.get_branches(stdscr)  # Refresh branch list
+                        except subprocess.CalledProcessError as e:
+                            stdscr.clear()
+                            stdscr.addstr(0, 0, f"Failed to create branch: {e}")
+                            stdscr.addstr(1, 0, "Press any key to continue...")
+                            stdscr.refresh()
+                            stdscr.getch()
             elif key == curses.KEY_UP:
                 self.selected_index = max(0, self.selected_index - 1)
             elif key == curses.KEY_DOWN:
@@ -918,6 +1021,15 @@ class GitBranchManager:
                     stdscr.refresh()
                     stdscr.getch()
                     continue
+                
+                # Check if trying to delete protected branch
+                if selected_branch in self.protected_branches:
+                    response = self.show_confirmation_dialog(
+                        stdscr,
+                        f"WARNING: '{selected_branch}' is a protected branch!\nAre you REALLY sure you want to delete it?"
+                    )
+                    if response != 'yes':
+                        continue
                 
                 # Show confirmation dialog
                 response = self.show_confirmation_dialog(
