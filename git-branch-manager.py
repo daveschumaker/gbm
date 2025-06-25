@@ -3,18 +3,107 @@
 import subprocess
 import sys
 import os
-from typing import List, Optional
+from typing import List, Optional, NamedTuple
 import curses
+from datetime import datetime, timedelta
+import time
+
+class BranchInfo(NamedTuple):
+    name: str
+    is_current: bool
+    commit_hash: str
+    commit_date: datetime
+    commit_message: str
+    has_uncommitted_changes: bool
+    
+    def format_relative_date(self) -> str:
+        """Format the commit date as a relative time string."""
+        now = datetime.now()
+        diff = now - self.commit_date
+        
+        if diff.days == 0:
+            if diff.seconds < 3600:
+                minutes = diff.seconds // 60
+                return f"{minutes} minute{'s' if minutes != 1 else ''} ago"
+            else:
+                hours = diff.seconds // 3600
+                return f"{hours} hour{'s' if hours != 1 else ''} ago"
+        elif diff.days == 1:
+            return "yesterday"
+        elif diff.days < 7:
+            return f"{diff.days} day{'s' if diff.days != 1 else ''} ago"
+        elif diff.days < 30:
+            weeks = diff.days // 7
+            return f"{weeks} week{'s' if weeks != 1 else ''} ago"
+        elif diff.days < 365:
+            months = diff.days // 30
+            return f"{months} month{'s' if months != 1 else ''} ago"
+        else:
+            years = diff.days // 365
+            return f"{years} year{'s' if years != 1 else ''} ago"
 
 class GitBranchManager:
     def __init__(self):
-        self.branches: List[str] = []
+        self.branches: List[BranchInfo] = []
         self.current_branch: Optional[str] = None
         self.selected_index: int = 0
         
-    def get_branches(self) -> None:
-        """Get list of local git branches."""
+    def get_branch_info(self, branch: str) -> Optional[BranchInfo]:
+        """Get commit info for a specific branch."""
         try:
+            # Get commit hash, date, and message
+            result = subprocess.run(
+                ["git", "log", "-1", "--format=%H|%at|%s", branch],
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            
+            if result.stdout.strip():
+                parts = result.stdout.strip().split('|', 2)
+                if len(parts) == 3:
+                    commit_hash = parts[0][:12]  # Short hash
+                    commit_timestamp = int(parts[1])
+                    commit_date = datetime.fromtimestamp(commit_timestamp)
+                    commit_message = parts[2]
+                    
+                    # Check for uncommitted changes only on current branch
+                    has_uncommitted_changes = False
+                    if branch == self.current_branch:
+                        status_result = subprocess.run(
+                            ["git", "status", "--porcelain"],
+                            capture_output=True,
+                            text=True,
+                            check=True
+                        )
+                        has_uncommitted_changes = bool(status_result.stdout.strip())
+                    
+                    return BranchInfo(
+                        name=branch,
+                        is_current=(branch == self.current_branch),
+                        commit_hash=commit_hash,
+                        commit_date=commit_date,
+                        commit_message=commit_message,
+                        has_uncommitted_changes=has_uncommitted_changes
+                    )
+            return None
+            
+        except subprocess.CalledProcessError:
+            return None
+    
+    def get_branches(self) -> None:
+        """Get list of local git branches with commit info."""
+        try:
+            # First get the current branch
+            current_result = subprocess.run(
+                ["git", "branch", "--show-current"],
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            self.current_branch = current_result.stdout.strip()
+            
+            # Get all branches
             result = subprocess.run(
                 ["git", "branch"],
                 capture_output=True,
@@ -26,11 +115,13 @@ class GitBranchManager:
             self.branches = []
             
             for line in lines:
-                if line.startswith('* '):
-                    self.current_branch = line[2:].strip()
-                    self.branches.append(line[2:].strip())
-                else:
-                    self.branches.append(line.strip())
+                branch_name = line.strip()
+                if branch_name.startswith('* '):
+                    branch_name = branch_name[2:]
+                
+                branch_info = self.get_branch_info(branch_name)
+                if branch_info:
+                    self.branches.append(branch_info)
                     
         except subprocess.CalledProcessError as e:
             print(f"Error getting branches: {e}")
@@ -75,6 +166,29 @@ class GitBranchManager:
         except subprocess.CalledProcessError as e:
             print(f"Error checking out branch {branch}: {e}")
             return False
+            
+    def delete_branch(self, branch: str) -> bool:
+        """Delete the specified branch."""
+        try:
+            subprocess.run(
+                ["git", "branch", "-d", branch],
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            return True
+        except subprocess.CalledProcessError as e:
+            # Try force delete if regular delete fails
+            try:
+                subprocess.run(
+                    ["git", "branch", "-D", branch],
+                    capture_output=True,
+                    text=True,
+                    check=True
+                )
+                return True
+            except subprocess.CalledProcessError:
+                return False
             
     def show_confirmation_dialog(self, stdscr, message: str) -> Optional[str]:
         """Show a confirmation dialog with yes/no/cancel options."""
@@ -135,7 +249,7 @@ class GitBranchManager:
             height, width = stdscr.getmaxyx()
             
             # Header
-            header = "Git Branch Manager - Use ↑/↓ to navigate, Enter to checkout, q/ESC to quit"
+            header = "Git Branch Manager - ↑/↓ navigate, Enter checkout, Shift+D delete, q/ESC quit"
             stdscr.addstr(0, 0, header[:width-1])
             stdscr.addstr(1, 0, "-" * min(len(header), width-1))
             
@@ -154,21 +268,30 @@ class GitBranchManager:
                 if branch_index >= len(self.branches):
                     break
                     
-                branch = self.branches[branch_index]
+                branch_info = self.branches[branch_index]
                 y = start_y + i
                 
-                # Prepare display string
-                if branch == self.current_branch:
-                    display_str = f"* {branch}"
-                else:
-                    display_str = f"  {branch}"
-                    
+                # Prepare display string with branch info
+                prefix = "* " if branch_info.is_current else "  "
+                relative_date = branch_info.format_relative_date()
+                
+                # Add modified indicator
+                modified_indicator = " [modified]" if branch_info.has_uncommitted_changes else ""
+                
+                # Truncate commit message if needed
+                max_msg_len = width - len(branch_info.name) - len(relative_date) - len(branch_info.commit_hash) - len(modified_indicator) - 10
+                commit_msg = branch_info.commit_message
+                if len(commit_msg) > max_msg_len and max_msg_len > 3:
+                    commit_msg = commit_msg[:max_msg_len-3] + "..."
+                
+                display_str = f"{prefix}{branch_info.name}{modified_indicator} • {relative_date} • {branch_info.commit_hash} • {commit_msg}"
+                
                 # Apply highlighting
                 if branch_index == self.selected_index:
                     stdscr.attron(curses.color_pair(1))
                     stdscr.addstr(y, 0, display_str[:width-1].ljust(width-1))
                     stdscr.attroff(curses.color_pair(1))
-                elif branch == self.current_branch:
+                elif branch_info.is_current:
                     stdscr.attron(curses.color_pair(2))
                     stdscr.addstr(y, 0, display_str[:width-1])
                     stdscr.attroff(curses.color_pair(2))
@@ -186,8 +309,47 @@ class GitBranchManager:
                 self.selected_index = max(0, self.selected_index - 1)
             elif key == curses.KEY_DOWN:
                 self.selected_index = min(len(self.branches) - 1, self.selected_index + 1)
+            elif key == ord('D'):  # Shift+D for delete
+                selected_branch = self.branches[self.selected_index].name
+                
+                # Check if trying to delete current branch
+                if selected_branch == self.current_branch:
+                    stdscr.clear()
+                    stdscr.addstr(0, 0, "Cannot delete the current branch!")
+                    stdscr.addstr(1, 0, "Please switch to another branch first.")
+                    stdscr.addstr(2, 0, "Press any key to continue...")
+                    stdscr.refresh()
+                    stdscr.getch()
+                    continue
+                
+                # Show confirmation dialog
+                response = self.show_confirmation_dialog(
+                    stdscr,
+                    f"Delete branch '{selected_branch}'?\nThis action cannot be undone."
+                )
+                
+                if response == 'yes':
+                    stdscr.clear()
+                    stdscr.addstr(0, 0, f"Deleting branch '{selected_branch}'...")
+                    stdscr.refresh()
+                    
+                    if self.delete_branch(selected_branch):
+                        stdscr.addstr(1, 0, f"Successfully deleted branch '{selected_branch}'")
+                        stdscr.addstr(2, 0, "Press any key to continue...")
+                        stdscr.refresh()
+                        stdscr.getch()
+                        self.get_branches()  # Refresh branch list
+                        # Adjust selected index if needed
+                        if self.selected_index >= len(self.branches):
+                            self.selected_index = len(self.branches) - 1
+                    else:
+                        stdscr.addstr(1, 0, f"Failed to delete branch '{selected_branch}'!")
+                        stdscr.addstr(2, 0, "The branch may have unmerged changes.")
+                        stdscr.addstr(3, 0, "Press any key to continue...")
+                        stdscr.refresh()
+                        stdscr.getch()
             elif key == ord('\n') or key == curses.KEY_ENTER:
-                selected_branch = self.branches[self.selected_index]
+                selected_branch = self.branches[self.selected_index].name
                 if selected_branch != self.current_branch:
                     # Check if there are changes to stash
                     try:
