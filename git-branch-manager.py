@@ -7,6 +7,7 @@ from typing import List, Optional, NamedTuple
 import curses
 from datetime import datetime, timedelta
 import time
+import json
 
 class BranchInfo(NamedTuple):
     name: str
@@ -15,6 +16,9 @@ class BranchInfo(NamedTuple):
     commit_date: datetime
     commit_message: str
     has_uncommitted_changes: bool
+    is_merged: bool
+    has_open_pr: bool
+    pr_number: Optional[int]
     
     def format_relative_date(self) -> str:
         """Format the commit date as a relative time string."""
@@ -47,7 +51,93 @@ class GitBranchManager:
         self.branches: List[BranchInfo] = []
         self.current_branch: Optional[str] = None
         self.selected_index: int = 0
+        self.main_branch: Optional[str] = None
+        self.gh_available: bool = self._check_gh_cli()
+        self.pr_cache: dict = {}  # Cache PR lookups for performance
         
+    def _check_gh_cli(self) -> bool:
+        """Check if gh CLI is available."""
+        try:
+            subprocess.run(["gh", "--version"], capture_output=True, check=True)
+            return True
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            return False
+    
+    def _get_main_branch(self) -> str:
+        """Get the main branch name (main or master)."""
+        if self.main_branch:
+            return self.main_branch
+            
+        try:
+            # Try to get the default branch from remote
+            result = subprocess.run(
+                ["git", "symbolic-ref", "refs/remotes/origin/HEAD"],
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            self.main_branch = result.stdout.strip().split('/')[-1]
+        except subprocess.CalledProcessError:
+            # Fallback: check if main or master exists
+            try:
+                subprocess.run(["git", "rev-parse", "--verify", "main"], capture_output=True, check=True)
+                self.main_branch = "main"
+            except subprocess.CalledProcessError:
+                self.main_branch = "master"
+        
+        return self.main_branch
+    
+    def _check_if_merged(self, branch: str) -> bool:
+        """Check if branch has been merged into main."""
+        try:
+            main_branch = self._get_main_branch()
+            # Check if all commits from branch are in main
+            result = subprocess.run(
+                ["git", "cherry", main_branch, branch],
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            # If no output, branch is fully merged
+            return len(result.stdout.strip()) == 0
+        except subprocess.CalledProcessError:
+            return False
+    
+    def _get_pr_info(self, branch: str) -> tuple[bool, Optional[int]]:
+        """Check if branch has an open PR using gh CLI."""
+        if not self.gh_available:
+            return False, None
+            
+        # Check cache first
+        if branch in self.pr_cache:
+            return self.pr_cache[branch]
+            
+        try:
+            # List PRs for this branch
+            result = subprocess.run(
+                ["gh", "pr", "list", "--head", branch, "--json", "number,state"],
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            
+            if result.stdout.strip():
+                import json
+                prs = json.loads(result.stdout)
+                # Look for open PRs
+                for pr in prs:
+                    if pr.get('state') == 'OPEN':
+                        pr_info = (True, pr.get('number'))
+                        self.pr_cache[branch] = pr_info
+                        return pr_info
+            
+            self.pr_cache[branch] = (False, None)
+            return False, None
+            
+        except (subprocess.CalledProcessError, json.JSONDecodeError):
+            self.pr_cache[branch] = (False, None)
+            return False, None
+    
     def get_branch_info(self, branch: str) -> Optional[BranchInfo]:
         """Get commit info for a specific branch."""
         try:
@@ -78,13 +168,20 @@ class GitBranchManager:
                         )
                         has_uncommitted_changes = bool(status_result.stdout.strip())
                     
+                    # Check merge and PR status
+                    is_merged = self._check_if_merged(branch)
+                    has_open_pr, pr_number = self._get_pr_info(branch)
+                    
                     return BranchInfo(
                         name=branch,
                         is_current=(branch == self.current_branch),
                         commit_hash=commit_hash,
                         commit_date=commit_date,
                         commit_message=commit_message,
-                        has_uncommitted_changes=has_uncommitted_changes
+                        has_uncommitted_changes=has_uncommitted_changes,
+                        is_merged=is_merged,
+                        has_open_pr=has_open_pr,
+                        pr_number=pr_number
                     )
             return None
             
@@ -275,6 +372,62 @@ class GitBranchManager:
                 user_input = user_input[:cursor_pos] + chr(key) + user_input[cursor_pos:]
                 cursor_pos += 1
     
+    def show_help(self, stdscr) -> None:
+        """Show help screen with all commands."""
+        stdscr.clear()
+        height, width = stdscr.getmaxyx()
+        
+        help_text = [
+            ("Git Branch Manager - Help", curses.A_BOLD),
+            ("=" * 30, 0),
+            ("", 0),
+            ("Navigation:", curses.A_BOLD),
+            ("  ↑/↓        Navigate through branches", 0),
+            ("  q/ESC      Quit", 0),
+            ("  ?          Show this help", 0),
+            ("", 0),
+            ("Branch Operations:", curses.A_BOLD),
+            ("  Enter      Checkout selected branch", 0),
+            ("  D          Delete selected branch", 0),
+            ("  M          Rename/move selected branch", 0),
+            ("", 0),
+            ("View Options:", curses.A_BOLD),
+            ("  r          Reload branch list", 0),
+            ("", 0),
+            ("Status Indicators:", curses.A_BOLD),
+            ("  *          Current branch", 0),
+            ("  [modified] Uncommitted changes", 0),
+            ("  [PR#123]   Has open pull request", 0),
+            ("  [merged]   Merged into main branch", 0),
+            ("", 0),
+            ("Color Coding:", curses.A_BOLD),
+            ("  Green      Current branch", 0),
+            ("  Cyan       Branch names / PR status", 0),
+            ("  Yellow     Modified indicator", 0),
+            ("  Magenta    Recent commits (<1 week) / Merged", 0),
+            ("  Blue       Commit hashes", 0),
+            ("  Red        Old branches (>1 month)", 0),
+            ("", 0),
+            ("Press any key to return...", curses.A_BOLD),
+        ]
+        
+        # Display help text
+        start_y = max(0, (height - len(help_text)) // 2)
+        for i, (text, attr) in enumerate(help_text):
+            if start_y + i < height - 1:
+                x = max(0, (width - len(text)) // 2)
+                try:
+                    if attr:
+                        stdscr.attron(attr)
+                    stdscr.addstr(start_y + i, x, text[:width-1])
+                    if attr:
+                        stdscr.attroff(attr)
+                except curses.error:
+                    pass
+        
+        stdscr.refresh()
+        stdscr.getch()
+    
     def show_confirmation_dialog(self, stdscr, message: str) -> Optional[str]:
         """Show a confirmation dialog with yes/no/cancel options."""
         height, width = stdscr.getmaxyx()
@@ -340,7 +493,7 @@ class GitBranchManager:
             height, width = stdscr.getmaxyx()
             
             # Header
-            header = "Git Branch Manager - ↑/↓ navigate, Enter checkout, D delete, M rename, q quit"
+            header = "Git Branch Manager - Press ? for help"
             stdscr.addstr(0, 0, header[:width-1])
             stdscr.addstr(1, 0, "-" * min(len(header), width-1))
             
@@ -375,12 +528,21 @@ class GitBranchManager:
                 else:
                     date_color = 8  # White for normal
                 
-                # Truncate commit message if needed
+                # Prepare status indicators
                 separator = " • "
                 modified_indicator = " [modified]" if branch_info.has_uncommitted_changes else ""
                 
+                # PR and merge status indicators
+                status_indicators = []
+                if branch_info.has_open_pr:
+                    status_indicators.append(f"PR#{branch_info.pr_number}")
+                if branch_info.is_merged:
+                    status_indicators.append("merged")
+                
+                status_str = f" [{', '.join(status_indicators)}]" if status_indicators else ""
+                
                 # Calculate available space for commit message
-                fixed_len = len(prefix) + len(branch_info.name) + len(modified_indicator) + len(separator) * 3 + len(relative_date) + len(branch_info.commit_hash)
+                fixed_len = len(prefix) + len(branch_info.name) + len(modified_indicator) + len(status_str) + len(separator) * 3 + len(relative_date) + len(branch_info.commit_hash)
                 max_msg_len = width - fixed_len - 1
                 commit_msg = branch_info.commit_message
                 if len(commit_msg) > max_msg_len and max_msg_len > 3:
@@ -400,6 +562,9 @@ class GitBranchManager:
                     if modified_indicator:
                         stdscr.addstr(y, x_pos, modified_indicator)
                         x_pos += len(modified_indicator)
+                    if status_str:
+                        stdscr.addstr(y, x_pos, status_str)
+                        x_pos += len(status_str)
                     stdscr.addstr(y, x_pos, separator)
                     x_pos += len(separator)
                     stdscr.addstr(y, x_pos, relative_date)
@@ -435,6 +600,19 @@ class GitBranchManager:
                         stdscr.attroff(curses.color_pair(3))
                         x_pos += len(modified_indicator)
                     
+                    # PR/merge status indicators
+                    if status_str:
+                        if branch_info.is_merged:
+                            stdscr.attron(curses.color_pair(5))  # Magenta for merged
+                        elif branch_info.has_open_pr:
+                            stdscr.attron(curses.color_pair(4))  # Cyan for PR
+                        stdscr.addstr(y, x_pos, status_str)
+                        if branch_info.is_merged:
+                            stdscr.attroff(curses.color_pair(5))
+                        elif branch_info.has_open_pr:
+                            stdscr.attroff(curses.color_pair(4))
+                        x_pos += len(status_str)
+                    
                     stdscr.addstr(y, x_pos, separator)
                     x_pos += len(separator)
                     
@@ -466,6 +644,29 @@ class GitBranchManager:
             
             if key == ord('q') or key == ord('Q') or key == 27:  # 27 is ESC
                 break
+            elif key == ord('?'):  # Show help
+                self.show_help(stdscr)
+            elif key == ord('r') or key == ord('R'):  # Reload
+                # Show loading message
+                stdscr.clear()
+                stdscr.addstr(0, 0, "Reloading branches...")
+                stdscr.refresh()
+                
+                # Clear caches
+                self.pr_cache.clear()
+                self.main_branch = None
+                
+                # Reload branches
+                self.get_branches()
+                
+                # Adjust selected index if needed
+                if self.selected_index >= len(self.branches):
+                    self.selected_index = max(0, len(self.branches) - 1)
+                
+                stdscr.addstr(1, 0, "Reload complete!")
+                stdscr.addstr(2, 0, "Press any key to continue...")
+                stdscr.refresh()
+                stdscr.getch()
             elif key == curses.KEY_UP:
                 self.selected_index = max(0, self.selected_index - 1)
             elif key == curses.KEY_DOWN:
