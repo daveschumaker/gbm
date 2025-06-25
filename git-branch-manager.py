@@ -56,6 +56,7 @@ class GitBranchManager:
         self.current_branch: Optional[str] = None
         self.selected_index: int = 0
         self.main_branch: Optional[str] = None
+        self.working_dir: str = os.getcwd()  # Store current working directory - must be before _check_gh_cli()
         self.gh_available: bool = self._check_gh_cli()
         self.pr_cache: dict = {}  # Cache PR lookups for performance
         self.show_remotes: bool = False  # Toggle for showing remote branches
@@ -67,10 +68,16 @@ class GitBranchManager:
         self.prefix_filter: str = ""  # Filter by prefix
         self.current_user: Optional[str] = self._get_current_user()
         
+    def _run_command(self, cmd: List[str], **kwargs) -> subprocess.CompletedProcess:
+        """Run a command in the current working directory."""
+        if 'cwd' not in kwargs:
+            kwargs['cwd'] = self.working_dir
+        return subprocess.run(cmd, **kwargs)
+        
     def _get_current_user(self) -> Optional[str]:
         """Get the current git user."""
         try:
-            result = subprocess.run(
+            result = self._run_command(
                 ["git", "config", "user.email"],
                 capture_output=True,
                 text=True,
@@ -84,13 +91,13 @@ class GitBranchManager:
         """Check if gh CLI is available and this is a GitHub repo."""
         # First check if gh is installed
         try:
-            subprocess.run(["gh", "--version"], capture_output=True, check=True)
+            self._run_command(["gh", "--version"], capture_output=True, check=True)
         except (subprocess.CalledProcessError, FileNotFoundError):
             return False
             
         # Then check if this is a GitHub repository
         try:
-            result = subprocess.run(
+            result = self._run_command(
                 ["git", "remote", "get-url", "origin"],
                 capture_output=True,
                 text=True,
@@ -110,7 +117,7 @@ class GitBranchManager:
             
         try:
             # Try to get the default branch from remote
-            result = subprocess.run(
+            result = self._run_command(
                 ["git", "symbolic-ref", "refs/remotes/origin/HEAD"],
                 capture_output=True,
                 text=True,
@@ -120,7 +127,7 @@ class GitBranchManager:
         except subprocess.CalledProcessError:
             # Fallback: check if main or master exists
             try:
-                subprocess.run(["git", "rev-parse", "--verify", "main"], capture_output=True, check=True)
+                self._run_command(["git", "rev-parse", "--verify", "main"], capture_output=True, check=True)
                 self.main_branch = "main"
             except subprocess.CalledProcessError:
                 self.main_branch = "master"
@@ -132,7 +139,7 @@ class GitBranchManager:
         try:
             main_branch = self._get_main_branch()
             # Check if all commits from branch are in main
-            result = subprocess.run(
+            result = self._run_command(
                 ["git", "cherry", main_branch, branch],
                 capture_output=True,
                 text=True,
@@ -154,7 +161,7 @@ class GitBranchManager:
             
         try:
             # List PRs for this branch
-            result = subprocess.run(
+            result = self._run_command(
                 ["gh", "pr", "list", "--head", branch, "--json", "number,state"],
                 capture_output=True,
                 text=True,
@@ -182,7 +189,7 @@ class GitBranchManager:
         """Get commit info for a specific branch."""
         try:
             # Get commit hash, date, message, and author email
-            result = subprocess.run(
+            result = self._run_command(
                 ["git", "log", "-1", "--format=%H|%at|%s|%ae", branch],
                 capture_output=True,
                 text=True,
@@ -201,7 +208,7 @@ class GitBranchManager:
                     # Check for uncommitted changes only on current branch
                     has_uncommitted_changes = False
                     if branch == self.current_branch:
-                        status_result = subprocess.run(
+                        status_result = self._run_command(
                             ["git", "status", "--porcelain"],
                             capture_output=True,
                             text=True,
@@ -241,7 +248,7 @@ class GitBranchManager:
         """Get list of git branches with commit info."""
         try:
             # First get the current branch
-            current_result = subprocess.run(
+            current_result = self._run_command(
                 ["git", "branch", "--show-current"],
                 capture_output=True,
                 text=True,
@@ -252,7 +259,7 @@ class GitBranchManager:
             self.branches = []
             
             # Get local branches
-            result = subprocess.run(
+            result = self._run_command(
                 ["git", "branch"],
                 capture_output=True,
                 text=True,
@@ -272,7 +279,7 @@ class GitBranchManager:
             
             # Get remote branches if enabled
             if self.show_remotes:
-                remote_result = subprocess.run(
+                remote_result = self._run_command(
                     ["git", "branch", "-r"],
                     capture_output=True,
                     text=True,
@@ -350,7 +357,7 @@ class GitBranchManager:
         """Stash current changes if any exist."""
         try:
             # Check if there are any changes to stash
-            status_result = subprocess.run(
+            status_result = self._run_command(
                 ["git", "status", "--porcelain"],
                 capture_output=True,
                 text=True,
@@ -359,7 +366,7 @@ class GitBranchManager:
             
             if status_result.stdout.strip():
                 # There are changes, stash them
-                subprocess.run(
+                self._run_command(
                     ["git", "stash", "push", "-m", "Stashed by git-branch-manager"],
                     capture_output=True,
                     text=True,
@@ -381,7 +388,7 @@ class GitBranchManager:
                 local_branch_name = parts[1]
                 
                 # Check if local branch already exists
-                check_result = subprocess.run(
+                check_result = self._run_command(
                     ["git", "rev-parse", "--verify", local_branch_name],
                     capture_output=True,
                     check=False
@@ -389,7 +396,7 @@ class GitBranchManager:
                 
                 if check_result.returncode == 0:
                     # Local branch exists, just check it out
-                    subprocess.run(
+                    self._run_command(
                         ["git", "checkout", local_branch_name],
                         capture_output=True,
                         text=True,
@@ -397,14 +404,14 @@ class GitBranchManager:
                     )
                 else:
                     # Create new tracking branch
-                    subprocess.run(
+                    self._run_command(
                         ["git", "checkout", "-b", local_branch_name, branch],
                         capture_output=True,
                         text=True,
                         check=True
                     )
             else:
-                subprocess.run(
+                self._run_command(
                     ["git", "checkout", branch],
                     capture_output=True,
                     text=True,
@@ -418,7 +425,7 @@ class GitBranchManager:
     def delete_branch(self, branch: str) -> bool:
         """Delete the specified branch."""
         try:
-            subprocess.run(
+            self._run_command(
                 ["git", "branch", "-d", branch],
                 capture_output=True,
                 text=True,
@@ -428,7 +435,7 @@ class GitBranchManager:
         except subprocess.CalledProcessError as e:
             # Try force delete if regular delete fails
             try:
-                subprocess.run(
+                self._run_command(
                     ["git", "branch", "-D", branch],
                     capture_output=True,
                     text=True,
@@ -441,7 +448,7 @@ class GitBranchManager:
     def move_branch(self, old_name: str, new_name: str) -> bool:
         """Move/rename a branch."""
         try:
-            subprocess.run(
+            self._run_command(
                 ["git", "branch", "-m", old_name, new_name],
                 capture_output=True,
                 text=True,
@@ -853,7 +860,7 @@ class GitBranchManager:
                 stdscr.refresh()
                 
                 try:
-                    result = subprocess.run(
+                    result = self._run_command(
                         ["git", "fetch", "--all"],
                         capture_output=True,
                         text=True,
@@ -1031,7 +1038,7 @@ class GitBranchManager:
                 if selected_branch != self.current_branch:
                     # Check if there are changes to stash
                     try:
-                        status_result = subprocess.run(
+                        status_result = self._run_command(
                             ["git", "status", "--porcelain"],
                             capture_output=True,
                             text=True,
@@ -1098,7 +1105,8 @@ def main():
         subprocess.run(
             ["git", "rev-parse", "--git-dir"],
             capture_output=True,
-            check=True
+            check=True,
+            cwd=os.getcwd()
         )
     except subprocess.CalledProcessError:
         print("Error: Not in a git repository")
