@@ -199,6 +199,32 @@ class GitBranchManager:
         except subprocess.CalledProcessError:
             return False
     
+    def safe_addstr(self, stdscr, y: int, x: int, text: str, attr: int = 0) -> int:
+        """Safely add string to screen, truncating if necessary. Returns new x position."""
+        height, width = stdscr.getmaxyx()
+        if y >= height or x >= width:
+            return x
+        
+        # Calculate available space
+        available = width - x - 1  # Leave 1 char margin
+        if available <= 0:
+            return x
+        
+        # Truncate text if needed
+        if len(text) > available:
+            text = text[:available]
+        
+        try:
+            if attr:
+                stdscr.attron(attr)
+            stdscr.addstr(y, x, text)
+            if attr:
+                stdscr.attroff(attr)
+        except curses.error:
+            pass
+        
+        return x + len(text)
+    
     def show_loading_message(self, stdscr, message: str) -> None:
         """Show a loading message in the center of the screen."""
         if stdscr:
@@ -734,72 +760,49 @@ class GitBranchManager:
                 if branch_index == self.selected_index:
                     # Selected row - inverse video
                     stdscr.attron(curses.color_pair(1))
-                    stdscr.addstr(y, 0, " " * (width - 1))  # Fill background
-                    stdscr.addstr(y, x_pos, prefix)
-                    x_pos += len(prefix)
-                    stdscr.addstr(y, x_pos, branch_info.name)
-                    x_pos += len(branch_info.name)
+                    try:
+                        stdscr.addstr(y, 0, " " * (width - 1))  # Fill background
+                    except curses.error:
+                        pass
+                    x_pos = self.safe_addstr(stdscr, y, x_pos, prefix)
+                    x_pos = self.safe_addstr(stdscr, y, x_pos, branch_info.name)
                     if modified_indicator:
-                        stdscr.addstr(y, x_pos, modified_indicator)
-                        x_pos += len(modified_indicator)
-                    stdscr.addstr(y, x_pos, separator)
-                    x_pos += len(separator)
-                    stdscr.addstr(y, x_pos, relative_date)
-                    x_pos += len(relative_date)
-                    stdscr.addstr(y, x_pos, separator)
-                    x_pos += len(separator)
-                    stdscr.addstr(y, x_pos, branch_info.commit_hash)
-                    x_pos += len(branch_info.commit_hash)
-                    stdscr.addstr(y, x_pos, separator)
-                    x_pos += len(separator)
-                    stdscr.addstr(y, x_pos, commit_msg)
+                        x_pos = self.safe_addstr(stdscr, y, x_pos, modified_indicator)
+                    x_pos = self.safe_addstr(stdscr, y, x_pos, separator)
+                    x_pos = self.safe_addstr(stdscr, y, x_pos, relative_date)
+                    x_pos = self.safe_addstr(stdscr, y, x_pos, separator)
+                    x_pos = self.safe_addstr(stdscr, y, x_pos, branch_info.commit_hash)
+                    x_pos = self.safe_addstr(stdscr, y, x_pos, separator)
+                    x_pos = self.safe_addstr(stdscr, y, x_pos, commit_msg)
                     stdscr.attroff(curses.color_pair(1))
                 else:
                     # Non-selected rows with colors
-                    stdscr.addstr(y, x_pos, prefix)
-                    x_pos += len(prefix)
+                    x_pos = self.safe_addstr(stdscr, y, x_pos, prefix)
                     
                     # Branch name color
                     if branch_info.is_current:
-                        stdscr.attron(curses.color_pair(2))
-                        stdscr.addstr(y, x_pos, branch_info.name)
-                        stdscr.attroff(curses.color_pair(2))
+                        x_pos = self.safe_addstr(stdscr, y, x_pos, branch_info.name, curses.color_pair(2))
                     else:
-                        stdscr.attron(curses.color_pair(4))
-                        stdscr.addstr(y, x_pos, branch_info.name)
-                        stdscr.attroff(curses.color_pair(4))
-                    x_pos += len(branch_info.name)
+                        x_pos = self.safe_addstr(stdscr, y, x_pos, branch_info.name, curses.color_pair(4))
                     
                     # Modified indicator
                     if modified_indicator:
-                        stdscr.attron(curses.color_pair(3))
-                        stdscr.addstr(y, x_pos, modified_indicator)
-                        stdscr.attroff(curses.color_pair(3))
-                        x_pos += len(modified_indicator)
+                        x_pos = self.safe_addstr(stdscr, y, x_pos, modified_indicator, curses.color_pair(3))
                     
-                    stdscr.addstr(y, x_pos, separator)
-                    x_pos += len(separator)
+                    x_pos = self.safe_addstr(stdscr, y, x_pos, separator)
                     
                     # Date with age-based color
-                    stdscr.attron(curses.color_pair(date_color))
-                    stdscr.addstr(y, x_pos, relative_date)
-                    stdscr.attroff(curses.color_pair(date_color))
-                    x_pos += len(relative_date)
+                    x_pos = self.safe_addstr(stdscr, y, x_pos, relative_date, curses.color_pair(date_color))
                     
-                    stdscr.addstr(y, x_pos, separator)
-                    x_pos += len(separator)
+                    x_pos = self.safe_addstr(stdscr, y, x_pos, separator)
                     
                     # Commit hash
-                    stdscr.attron(curses.color_pair(6))
-                    stdscr.addstr(y, x_pos, branch_info.commit_hash)
-                    stdscr.attroff(curses.color_pair(6))
-                    x_pos += len(branch_info.commit_hash)
+                    x_pos = self.safe_addstr(stdscr, y, x_pos, branch_info.commit_hash, curses.color_pair(6))
                     
-                    stdscr.addstr(y, x_pos, separator)
-                    x_pos += len(separator)
+                    x_pos = self.safe_addstr(stdscr, y, x_pos, separator)
                     
                     # Commit message
-                    stdscr.addstr(y, x_pos, commit_msg)
+                    x_pos = self.safe_addstr(stdscr, y, x_pos, commit_msg)
                     
             stdscr.refresh()
             
@@ -812,21 +815,12 @@ class GitBranchManager:
                 self.show_help(stdscr)
             elif key == ord('t') or key == ord('T'):  # Toggle remote branches
                 self.show_remotes = not self.show_remotes
-                stdscr.clear()
-                stdscr.addstr(0, 0, f"Remote branches: {'ON' if self.show_remotes else 'OFF'}")
-                stdscr.addstr(1, 0, "Loading branches...")
-                stdscr.refresh()
-                
-                # Reload branches
+                # Reload branches with loading message
                 self.get_branches(stdscr)
                 
                 # Adjust selected index if needed
                 if self.selected_index >= len(self.filtered_branches):
                     self.selected_index = max(0, len(self.filtered_branches) - 1)
-                    
-                stdscr.addstr(2, 0, "Press any key to continue...")
-                stdscr.refresh()
-                stdscr.getch()
             elif key == ord('f') or key == ord('F'):  # Fetch from remote
                 stdscr.clear()
                 stdscr.addstr(0, 0, "Fetching from remote...")
@@ -839,37 +833,21 @@ class GitBranchManager:
                         text=True,
                         check=True
                     )
-                    stdscr.addstr(1, 0, "Fetch complete!")
-                    stdscr.addstr(2, 0, "Reloading branches...")
-                    stdscr.refresh()
-                    
-                    # Reload branches
+                    # Reload branches immediately after fetch
                     self.get_branches(stdscr)
-                    
-                    stdscr.addstr(3, 0, "Press any key to continue...")
                 except subprocess.CalledProcessError as e:
-                    stdscr.addstr(1, 0, f"Fetch failed: {e}")
-                    stdscr.addstr(2, 0, "Press any key to continue...")
-                
-                stdscr.refresh()
-                stdscr.getch()
+                    stdscr.clear()
+                    stdscr.addstr(0, 0, f"Fetch failed: {e}")
+                    stdscr.addstr(1, 0, "Press any key to continue...")
+                    stdscr.refresh()
+                    stdscr.getch()
             elif key == ord('r') or key == ord('R'):  # Reload
-                # Show loading message
-                stdscr.clear()
-                stdscr.addstr(0, 0, "Reloading branches...")
-                stdscr.refresh()
-                
-                # Reload branches
+                # Just reload branches - the loading message is shown by get_branches
                 self.get_branches(stdscr)
                 
                 # Adjust selected index if needed
                 if self.selected_index >= len(self.filtered_branches):
                     self.selected_index = max(0, len(self.filtered_branches) - 1)
-                
-                stdscr.addstr(1, 0, "Reload complete!")
-                stdscr.addstr(2, 0, "Press any key to continue...")
-                stdscr.refresh()
-                stdscr.getch()
             elif key == ord('/'):  # Search filter
                 search_term = self.show_input_dialog(
                     stdscr,
@@ -933,23 +911,16 @@ class GitBranchManager:
                 )
                 
                 if response == 'yes':
-                    stdscr.clear()
-                    stdscr.addstr(0, 0, f"Deleting branch '{selected_branch}'...")
-                    stdscr.refresh()
-                    
                     if self.delete_branch(selected_branch):
-                        stdscr.addstr(1, 0, f"Successfully deleted branch '{selected_branch}'")
-                        stdscr.addstr(2, 0, "Press any key to continue...")
-                        stdscr.refresh()
-                        stdscr.getch()
                         self.get_branches(stdscr)  # Refresh branch list
                         # Adjust selected index if needed
                         if self.selected_index >= len(self.filtered_branches):
                             self.selected_index = max(0, len(self.filtered_branches) - 1)
                     else:
-                        stdscr.addstr(1, 0, f"Failed to delete branch '{selected_branch}'!")
-                        stdscr.addstr(2, 0, "The branch may have unpushed commits or is not fully merged.")
-                        stdscr.addstr(3, 0, "Press any key to continue...")
+                        stdscr.clear()
+                        stdscr.addstr(0, 0, f"Failed to delete branch '{selected_branch}'!")
+                        stdscr.addstr(1, 0, "The branch may have unpushed commits or is not fully merged.")
+                        stdscr.addstr(2, 0, "Press any key to continue...")
                         stdscr.refresh()
                         stdscr.getch()
             elif key == ord('M'):  # Shift+M for move/rename
@@ -975,19 +946,11 @@ class GitBranchManager:
                         stdscr.getch()
                         continue
                     
-                    stdscr.clear()
-                    stdscr.addstr(0, 0, f"Renaming branch '{selected_branch}' to '{new_name}'...")
-                    stdscr.refresh()
-                    
                     if self.move_branch(selected_branch, new_name):
-                        stdscr.addstr(1, 0, f"Successfully renamed branch to '{new_name}'")
-                        stdscr.addstr(2, 0, "Press any key to continue...")
-                        stdscr.refresh()
-                        stdscr.getch()
-                        self.get_branches(stdscr)  # Refresh branch list
                         # Update current branch name if it was renamed
                         if selected_branch == self.current_branch:
                             self.current_branch = new_name
+                        self.get_branches(stdscr)  # Refresh branch list
                     else:
                         stdscr.addstr(1, 0, f"Failed to rename branch!")
                         stdscr.addstr(2, 0, "Press any key to continue...")
@@ -1037,27 +1000,13 @@ class GitBranchManager:
                                     continue
                             # If 'no', proceed without stashing
                         
-                        stdscr.clear()
-                        if selected_branch_info.is_remote:
-                            stdscr.addstr(0, 0, f"Creating local branch '{display_name}' from '{selected_branch}'...")
-                        else:
-                            stdscr.addstr(0, 0, f"Switching to branch '{selected_branch}'...")
-                        stdscr.refresh()
-                        
-                        if stashed:
-                            stdscr.addstr(1, 0, "Stashed current changes.")
-                            stdscr.refresh()
-                        
                         # Checkout branch
                         if self.checkout_branch(selected_branch, selected_branch_info.is_remote):
-                            stdscr.addstr(2 if stashed else 1, 0, f"Successfully checked out '{display_name}'")
-                            stdscr.addstr(3 if stashed else 2, 0, "Press any key to continue...")
-                            stdscr.refresh()
-                            stdscr.getch()
                             self.get_branches(stdscr)  # Refresh branch list
                         else:
-                            stdscr.addstr(2 if stashed else 1, 0, "Failed to checkout branch!")
-                            stdscr.addstr(3 if stashed else 2, 0, "Press any key to continue...")
+                            stdscr.clear()
+                            stdscr.addstr(0, 0, "Failed to checkout branch!")
+                            stdscr.addstr(1, 0, "Press any key to continue...")
                             stdscr.refresh()
                             stdscr.getch()
                             
