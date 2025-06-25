@@ -15,6 +15,7 @@ class BranchInfo(NamedTuple):
     commit_hash: str
     commit_date: datetime
     commit_message: str
+    commit_author: str
     has_uncommitted_changes: bool
     is_merged: bool
     has_open_pr: bool
@@ -51,12 +52,33 @@ class BranchInfo(NamedTuple):
 class GitBranchManager:
     def __init__(self):
         self.branches: List[BranchInfo] = []
+        self.filtered_branches: List[BranchInfo] = []  # Filtered view of branches
         self.current_branch: Optional[str] = None
         self.selected_index: int = 0
         self.main_branch: Optional[str] = None
         self.gh_available: bool = self._check_gh_cli()
         self.pr_cache: dict = {}  # Cache PR lookups for performance
         self.show_remotes: bool = False  # Toggle for showing remote branches
+        
+        # Filters
+        self.search_filter: str = ""  # Search by name substring
+        self.author_filter: bool = False  # Show only current user's branches
+        self.age_filter: bool = False  # Hide old branches (>3 months)
+        self.prefix_filter: str = ""  # Filter by prefix
+        self.current_user: Optional[str] = self._get_current_user()
+        
+    def _get_current_user(self) -> Optional[str]:
+        """Get the current git user."""
+        try:
+            result = subprocess.run(
+                ["git", "config", "user.email"],
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            return result.stdout.strip()
+        except subprocess.CalledProcessError:
+            return None
         
     def _check_gh_cli(self) -> bool:
         """Check if gh CLI is available and this is a GitHub repo."""
@@ -159,21 +181,22 @@ class GitBranchManager:
     def get_branch_info(self, branch: str, is_remote: bool = False, remote_name: Optional[str] = None) -> Optional[BranchInfo]:
         """Get commit info for a specific branch."""
         try:
-            # Get commit hash, date, and message
+            # Get commit hash, date, message, and author email
             result = subprocess.run(
-                ["git", "log", "-1", "--format=%H|%at|%s", branch],
+                ["git", "log", "-1", "--format=%H|%at|%s|%ae", branch],
                 capture_output=True,
                 text=True,
                 check=True
             )
             
             if result.stdout.strip():
-                parts = result.stdout.strip().split('|', 2)
-                if len(parts) == 3:
+                parts = result.stdout.strip().split('|', 3)
+                if len(parts) == 4:
                     commit_hash = parts[0][:12]  # Short hash
                     commit_timestamp = int(parts[1])
                     commit_date = datetime.fromtimestamp(commit_timestamp)
                     commit_message = parts[2]
+                    commit_author = parts[3]
                     
                     # Check for uncommitted changes only on current branch
                     has_uncommitted_changes = False
@@ -201,6 +224,7 @@ class GitBranchManager:
                         commit_hash=commit_hash,
                         commit_date=commit_date,
                         commit_message=commit_message,
+                        commit_author=commit_author,
                         has_uncommitted_changes=has_uncommitted_changes,
                         is_merged=is_merged,
                         has_open_pr=has_open_pr,
@@ -277,10 +301,50 @@ class GitBranchManager:
                         branch_info = self.get_branch_info(branch_name, is_remote=True, remote_name=remote_name)
                         if branch_info:
                             self.branches.append(branch_info)
+            
+            # Apply filters
+            self._apply_filters()
                     
         except subprocess.CalledProcessError as e:
             print(f"Error getting branches: {e}")
             sys.exit(1)
+            
+    def _apply_filters(self) -> None:
+        """Apply all active filters to the branch list."""
+        self.filtered_branches = self.branches[:]
+        
+        # Search filter (name substring)
+        if self.search_filter:
+            self.filtered_branches = [
+                b for b in self.filtered_branches 
+                if self.search_filter.lower() in b.name.lower()
+            ]
+        
+        # Author filter
+        if self.author_filter and self.current_user:
+            self.filtered_branches = [
+                b for b in self.filtered_branches 
+                if b.commit_author == self.current_user
+            ]
+        
+        # Age filter (hide old branches > 3 months)
+        if self.age_filter:
+            three_months_ago = datetime.now() - timedelta(days=90)
+            self.filtered_branches = [
+                b for b in self.filtered_branches 
+                if b.commit_date >= three_months_ago
+            ]
+        
+        # Prefix filter
+        if self.prefix_filter:
+            self.filtered_branches = [
+                b for b in self.filtered_branches 
+                if b.name.startswith(self.prefix_filter)
+            ]
+        
+        # Adjust selected index if it's out of bounds
+        if self.selected_index >= len(self.filtered_branches):
+            self.selected_index = max(0, len(self.filtered_branches) - 1)
             
     def stash_changes(self) -> bool:
         """Stash current changes if any exist."""
@@ -483,6 +547,13 @@ class GitBranchManager:
             ("  t          Toggle remote branches", 0),
             ("  f          Fetch latest from remote", 0),
             ("", 0),
+            ("Filtering:", curses.A_BOLD),
+            ("  /          Search branches by name", 0),
+            ("  a          Toggle author filter (show only your branches)", 0),
+            ("  o          Toggle old branches filter (hide >3 months)", 0),
+            ("  p          Filter by prefix (feature/, bugfix/, etc)", 0),
+            ("  c          Clear all filters", 0),
+            ("", 0),
             ("Status Indicators:", curses.A_BOLD),
             ("  *          Current branch", 0),
             ("  ↓          Remote branch", 0),
@@ -587,12 +658,27 @@ class GitBranchManager:
             header = "Git Branch Manager - Press ? for help"
             if self.show_remotes:
                 header += " [REMOTES ON]"
+            
+            # Add active filter indicators
+            filters = []
+            if self.search_filter:
+                filters.append(f"search:{self.search_filter}")
+            if self.author_filter:
+                filters.append("author:me")
+            if self.age_filter:
+                filters.append("age:<3m")
+            if self.prefix_filter:
+                filters.append(f"prefix:{self.prefix_filter}")
+            
+            if filters:
+                header += f" [Filters: {', '.join(filters)}]"
+            
             stdscr.addstr(0, 0, header[:width-1])
             stdscr.addstr(1, 0, "-" * min(len(header), width-1))
             
             # Display branches
             start_y = 3
-            visible_branches = min(height - start_y - 1, len(self.branches))
+            visible_branches = min(height - start_y - 1, len(self.filtered_branches))
             
             # Calculate scroll position
             if self.selected_index >= visible_branches:
@@ -602,10 +688,10 @@ class GitBranchManager:
                 
             for i in range(visible_branches):
                 branch_index = i + scroll_offset
-                if branch_index >= len(self.branches):
+                if branch_index >= len(self.filtered_branches):
                     break
                     
-                branch_info = self.branches[branch_index]
+                branch_info = self.filtered_branches[branch_index]
                 y = start_y + i
                 
                 # Prepare display components
@@ -755,8 +841,8 @@ class GitBranchManager:
                 self.get_branches()
                 
                 # Adjust selected index if needed
-                if self.selected_index >= len(self.branches):
-                    self.selected_index = max(0, len(self.branches) - 1)
+                if self.selected_index >= len(self.filtered_branches):
+                    self.selected_index = max(0, len(self.filtered_branches) - 1)
                     
                 stdscr.addstr(2, 0, "Press any key to continue...")
                 stdscr.refresh()
@@ -801,19 +887,58 @@ class GitBranchManager:
                 self.get_branches()
                 
                 # Adjust selected index if needed
-                if self.selected_index >= len(self.branches):
-                    self.selected_index = max(0, len(self.branches) - 1)
+                if self.selected_index >= len(self.filtered_branches):
+                    self.selected_index = max(0, len(self.filtered_branches) - 1)
                 
                 stdscr.addstr(1, 0, "Reload complete!")
                 stdscr.addstr(2, 0, "Press any key to continue...")
                 stdscr.refresh()
                 stdscr.getch()
+            elif key == ord('/'):  # Search filter
+                search_term = self.show_input_dialog(
+                    stdscr,
+                    "Search branches by name:",
+                    self.search_filter
+                )
+                if search_term is not None:  # User didn't cancel
+                    self.search_filter = search_term
+                    self._apply_filters()
+                    self.selected_index = 0  # Reset to first result
+            elif key == ord('a') or key == ord('A'):  # Author filter
+                self.author_filter = not self.author_filter
+                self._apply_filters()
+                if self.selected_index >= len(self.filtered_branches):
+                    self.selected_index = max(0, len(self.filtered_branches) - 1)
+            elif key == ord('o') or key == ord('O'):  # Old branches filter
+                self.age_filter = not self.age_filter
+                self._apply_filters()
+                if self.selected_index >= len(self.filtered_branches):
+                    self.selected_index = max(0, len(self.filtered_branches) - 1)
+            elif key == ord('p') or key == ord('P'):  # Prefix filter
+                prefix = self.show_input_dialog(
+                    stdscr,
+                    "Filter by prefix (e.g. feature/, bugfix/):",
+                    self.prefix_filter
+                )
+                if prefix is not None:  # User didn't cancel
+                    self.prefix_filter = prefix
+                    self._apply_filters()
+                    self.selected_index = 0  # Reset to first result
+            elif key == ord('c') or key == ord('C'):  # Clear filters
+                self.search_filter = ""
+                self.author_filter = False
+                self.age_filter = False
+                self.prefix_filter = ""
+                self._apply_filters()
+                self.selected_index = 0
             elif key == curses.KEY_UP:
                 self.selected_index = max(0, self.selected_index - 1)
             elif key == curses.KEY_DOWN:
-                self.selected_index = min(len(self.branches) - 1, self.selected_index + 1)
+                self.selected_index = min(len(self.filtered_branches) - 1, self.selected_index + 1)
             elif key == ord('D'):  # Shift+D for delete
-                selected_branch = self.branches[self.selected_index].name
+                if not self.filtered_branches:
+                    continue
+                selected_branch = self.filtered_branches[self.selected_index].name
                 
                 # Check if trying to delete current branch
                 if selected_branch == self.current_branch:
@@ -843,8 +968,8 @@ class GitBranchManager:
                         stdscr.getch()
                         self.get_branches()  # Refresh branch list
                         # Adjust selected index if needed
-                        if self.selected_index >= len(self.branches):
-                            self.selected_index = len(self.branches) - 1
+                        if self.selected_index >= len(self.filtered_branches):
+                            self.selected_index = max(0, len(self.filtered_branches) - 1)
                     else:
                         stdscr.addstr(1, 0, f"Failed to delete branch '{selected_branch}'!")
                         stdscr.addstr(2, 0, "The branch may have unmerged changes.")
@@ -852,7 +977,9 @@ class GitBranchManager:
                         stdscr.refresh()
                         stdscr.getch()
             elif key == ord('M'):  # Shift+M for move/rename
-                selected_branch = self.branches[self.selected_index].name
+                if not self.filtered_branches:
+                    continue
+                selected_branch = self.filtered_branches[self.selected_index].name
                 
                 # Get new name from user
                 new_name = self.show_input_dialog(
@@ -891,7 +1018,9 @@ class GitBranchManager:
                         stdscr.refresh()
                         stdscr.getch()
             elif key == ord('\n') or key == curses.KEY_ENTER:
-                selected_branch_info = self.branches[self.selected_index]
+                if not self.filtered_branches:
+                    continue
+                selected_branch_info = self.filtered_branches[self.selected_index]
                 selected_branch = selected_branch_info.name
                 
                 # For remote branches, show the local name that will be created
