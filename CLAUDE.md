@@ -18,6 +18,7 @@ Git Branch Manager is a terminal-based (TUI) Git branch management tool written 
 - **Branch Creation**: Create new branches with 'N' key
 - **Branch Protection**: Extra confirmation for deleting main/master branches
 - **Performance Optimized**: Uses batch operations for fast loading in large repos
+- **Browser Integration**: Open branches in web browser (GitHub, GitLab, Bitbucket, etc.)
 
 ### Advanced Features
 - **Branch Filtering**: Search by name, author, age, or prefix
@@ -36,10 +37,17 @@ Git Branch Manager is a terminal-based (TUI) Git branch management tool written 
    - Has method for formatting relative dates
    - No longer includes merge/PR status (removed for performance)
 
-2. **GitBranchManager Class**
+2. **GitPlatformURLBuilder Class**
+   - Detects Git hosting platform from remote URL
+   - Builds platform-specific URLs for viewing branches and creating PRs
+   - Supports GitHub, GitLab, Bitbucket (Cloud & Server), Azure DevOps
+   - Extensible via configuration for custom platforms
+
+3. **GitBranchManager Class**
    - Core application logic
    - Manages branch list, UI state, filtering, and operations
    - Handles git commands via subprocess with working directory support
+   - Loads/saves configuration from ~/.config/git-branch-manager/
 
 ### Key Methods
 - `get_branches()`: Fetches branches using optimized batch operations
@@ -80,9 +88,11 @@ Git Branch Manager is a terminal-based (TUI) Git branch management tool written 
 - `M`: Move/rename branch (with input dialog)
 - `N`: Create new branch from current (with optional checkout)
 - `S`: Pop last stash (if available)
-- `t`: Toggle remote branches
+- `t`: Toggle remote branches (fetches automatically)
 - `f`: Fetch from remote
 - `r`: Reload branch list
+- `b`: Open branch in browser
+- `B`: Open branch comparison/PR creation in browser
 - `/`: Search branches by name
 - `a`: Toggle author filter (show only your branches)
 - `o`: Toggle old branches filter (hide >3 months)
@@ -149,6 +159,9 @@ Git Branch Manager is a terminal-based (TUI) Git branch management tool written 
 - **Stash Recovery**: Press 'S' to pop the last stash created by the app
 - **Branch Protection**: Main and master branches require extra confirmation before deletion
 - **Branch Creation**: Press 'N' to create a new branch with optional checkout
+- **Browser Integration**: Press 'b' to open branch in browser, 'B' for compare/PR view
+- **Auto-fetch on Remote Toggle**: Pressing 't' now automatically fetches before showing remotes
+- **Multi-platform Browser Support**: Automatically detects GitHub, GitLab, Bitbucket, Azure DevOps, etc.
 
 ## Future Enhancement Ideas
 - Multiple selection for bulk operations
@@ -163,10 +176,27 @@ Git Branch Manager is a terminal-based (TUI) Git branch management tool written 
 - Test with various terminal sizes
 - Ensure proper error handling for subprocess calls
 
+## Configuration
+
+The app supports configuration via `~/.config/git-branch-manager/config.json`:
+
+```json
+{
+  "platform": "auto",              // auto-detect or: github, gitlab, bitbucket-cloud, bitbucket-server, custom
+  "default_base_branch": "main",   // default branch for comparisons
+  "browser_command": "open",       // command to open browser (open on macOS, xdg-open on Linux)
+  "custom_patterns": {             // for custom Git hosting platforms
+    "branch": "https://git.example.com/{repo}/tree/{branch}",
+    "compare": "https://git.example.com/{repo}/compare/{base}...{branch}"
+  }
+}
+```
+
 ## Dependencies
 - Python 3.x
 - curses (built-in)
 - git (command-line)
+- webbrowser (built-in)
 
 ## Files
 - `git-branch-manager.py`: Main application file

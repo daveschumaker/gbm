@@ -3,11 +3,14 @@
 import subprocess
 import sys
 import os
-from typing import List, Optional, NamedTuple, Dict, Tuple
+from typing import List, Optional, NamedTuple, Dict, Tuple, Any
 import curses
 from datetime import datetime, timedelta
 import time
 import json
+import webbrowser
+import urllib.parse
+import re
 
 class BranchInfo(NamedTuple):
     name: str
@@ -46,6 +49,154 @@ class BranchInfo(NamedTuple):
             years = diff.days // 365
             return f"{years} year{'s' if years != 1 else ''} ago"
 
+class GitPlatformURLBuilder:
+    """Builds URLs for different Git hosting platforms."""
+    
+    def __init__(self, config: Dict[str, Any], remote_url: str):
+        self.config = config
+        self.remote_url = remote_url
+        self.platform = self._detect_platform()
+        self.repo_info = self._parse_remote_url()
+    
+    def _detect_platform(self) -> str:
+        """Detect the Git hosting platform from the remote URL."""
+        if self.config.get('platform') != 'auto':
+            return self.config.get('platform', 'unknown')
+        
+        url = self.remote_url.lower()
+        
+        if 'github.com' in url:
+            return 'github'
+        elif 'gitlab.com' in url:
+            return 'gitlab'
+        elif 'bitbucket.org' in url:
+            return 'bitbucket-cloud'
+        elif 'dev.azure.com' in url or 'visualstudio.com' in url:
+            return 'azure-devops'
+        elif '/projects/' in url and '/repos/' in url:
+            # Bitbucket Server pattern
+            return 'bitbucket-server'
+        elif self.config.get('custom_patterns'):
+            return 'custom'
+        else:
+            return 'unknown'
+    
+    def _parse_remote_url(self) -> Dict[str, str]:
+        """Parse the remote URL to extract repository information."""
+        info = {}
+        
+        # Remove git@ prefix and .git suffix
+        url = self.remote_url
+        if url.startswith('git@'):
+            url = url.replace('git@', 'https://').replace(':', '/', 1)
+        if url.endswith('.git'):
+            url = url[:-4]
+        
+        # Extract domain
+        if '://' in url:
+            protocol, rest = url.split('://', 1)
+            info['protocol'] = protocol
+            parts = rest.split('/', 1)
+            info['domain'] = parts[0]
+            path = parts[1] if len(parts) > 1 else ''
+        else:
+            info['domain'] = ''
+            path = url
+        
+        # Platform-specific parsing
+        if self.platform == 'github':
+            # github.com/owner/repo
+            parts = path.split('/')
+            if len(parts) >= 2:
+                info['owner'] = parts[0]
+                info['repo'] = parts[1]
+        
+        elif self.platform == 'gitlab':
+            # gitlab.com/owner/repo or gitlab.com/group/subgroup/repo
+            parts = path.split('/')
+            if len(parts) >= 2:
+                info['owner'] = '/'.join(parts[:-1])
+                info['repo'] = parts[-1]
+        
+        elif self.platform == 'bitbucket-cloud':
+            # bitbucket.org/workspace/repo
+            parts = path.split('/')
+            if len(parts) >= 2:
+                info['workspace'] = parts[0]
+                info['repo'] = parts[1]
+        
+        elif self.platform == 'bitbucket-server':
+            # domain/projects/PROJECT/repos/repo
+            match = re.search(r'projects/([^/]+)/repos/([^/]+)', path)
+            if match:
+                info['project'] = match.group(1)
+                info['repo'] = match.group(2)
+        
+        elif self.platform == 'azure-devops':
+            # dev.azure.com/org/project/_git/repo
+            parts = path.split('/')
+            if len(parts) >= 4 and parts[2] == '_git':
+                info['org'] = parts[0]
+                info['project'] = parts[1]
+                info['repo'] = parts[3]
+        
+        return info
+    
+    def build_branch_url(self, branch_name: str) -> Optional[str]:
+        """Build URL to view a specific branch."""
+        if not self.repo_info:
+            return None
+        
+        if self.platform == 'github':
+            return f"https://github.com/{self.repo_info['owner']}/{self.repo_info['repo']}/tree/{urllib.parse.quote(branch_name)}"
+        
+        elif self.platform == 'gitlab':
+            return f"https://gitlab.com/{self.repo_info['owner']}/{self.repo_info['repo']}/-/tree/{urllib.parse.quote(branch_name)}"
+        
+        elif self.platform == 'bitbucket-cloud':
+            return f"https://bitbucket.org/{self.repo_info['workspace']}/{self.repo_info['repo']}/branch/{urllib.parse.quote(branch_name)}"
+        
+        elif self.platform == 'bitbucket-server':
+            return f"https://{self.repo_info['domain']}/projects/{self.repo_info['project']}/repos/{self.repo_info['repo']}/browse?at=refs/heads/{urllib.parse.quote(branch_name)}"
+        
+        elif self.platform == 'azure-devops':
+            return f"https://dev.azure.com/{self.repo_info['org']}/{self.repo_info['project']}/_git/{self.repo_info['repo']}?version=GB{urllib.parse.quote(branch_name)}"
+        
+        elif self.platform == 'custom' and self.config.get('custom_patterns', {}).get('branch'):
+            template = self.config['custom_patterns']['branch']
+            return template.format(branch=urllib.parse.quote(branch_name), **self.repo_info)
+        
+        return None
+    
+    def build_compare_url(self, branch_name: str, base_branch: Optional[str] = None) -> Optional[str]:
+        """Build URL to compare branch with base branch or create PR."""
+        if not self.repo_info:
+            return None
+        
+        if not base_branch:
+            base_branch = self.config.get('default_base_branch', 'main')
+        
+        if self.platform == 'github':
+            return f"https://github.com/{self.repo_info['owner']}/{self.repo_info['repo']}/compare/{urllib.parse.quote(base_branch)}...{urllib.parse.quote(branch_name)}"
+        
+        elif self.platform == 'gitlab':
+            return f"https://gitlab.com/{self.repo_info['owner']}/{self.repo_info['repo']}/-/compare/{urllib.parse.quote(base_branch)}...{urllib.parse.quote(branch_name)}"
+        
+        elif self.platform == 'bitbucket-cloud':
+            return f"https://bitbucket.org/{self.repo_info['workspace']}/{self.repo_info['repo']}/pull-requests/new?source={urllib.parse.quote(branch_name)}&dest={urllib.parse.quote(base_branch)}"
+        
+        elif self.platform == 'bitbucket-server':
+            return f"https://{self.repo_info['domain']}/projects/{self.repo_info['project']}/repos/{self.repo_info['repo']}/compare/commits?sourceBranch=refs/heads/{urllib.parse.quote(branch_name)}&targetBranch=refs/heads/{urllib.parse.quote(base_branch)}"
+        
+        elif self.platform == 'azure-devops':
+            return f"https://dev.azure.com/{self.repo_info['org']}/{self.repo_info['project']}/_git/{self.repo_info['repo']}/pullrequestcreate?sourceRef={urllib.parse.quote(branch_name)}&targetRef={urllib.parse.quote(base_branch)}"
+        
+        elif self.platform == 'custom' and self.config.get('custom_patterns', {}).get('compare'):
+            template = self.config['custom_patterns']['compare']
+            return template.format(branch=urllib.parse.quote(branch_name), base=urllib.parse.quote(base_branch), **self.repo_info)
+        
+        return None
+
 class GitBranchManager:
     def __init__(self):
         self.branches: List[BranchInfo] = []
@@ -63,6 +214,68 @@ class GitBranchManager:
         self.current_user: Optional[str] = self._get_current_user()
         self.last_stash_ref: Optional[str] = None  # Track last stash created
         self.protected_branches: List[str] = ["main", "master"]  # Protected branches
+        
+        # Configuration
+        self.config: Dict[str, Any] = self._load_config()
+        self.url_builder: Optional[GitPlatformURLBuilder] = None
+        self._init_url_builder()
+        
+    def _get_config_path(self) -> str:
+        """Get the path to the configuration file."""
+        xdg_config_home = os.environ.get('XDG_CONFIG_HOME', os.path.expanduser('~/.config'))
+        return os.path.join(xdg_config_home, 'git-branch-manager', 'config.json')
+    
+    def _load_config(self) -> Dict[str, Any]:
+        """Load configuration from file or return defaults."""
+        config_path = self._get_config_path()
+        default_config = {
+            'platform': 'auto',
+            'default_base_branch': 'main',
+            'browser_command': 'open' if sys.platform == 'darwin' else 'xdg-open' if sys.platform.startswith('linux') else 'start',
+            'custom_patterns': {}
+        }
+        
+        if os.path.exists(config_path):
+            try:
+                with open(config_path, 'r') as f:
+                    user_config = json.load(f)
+                    # Merge with defaults
+                    default_config.update(user_config)
+            except (json.JSONDecodeError, IOError) as e:
+                print(f"Warning: Could not load config from {config_path}: {e}")
+        
+        return default_config
+    
+    def _save_config(self) -> None:
+        """Save current configuration to file."""
+        config_path = self._get_config_path()
+        config_dir = os.path.dirname(config_path)
+        
+        # Create directory if it doesn't exist
+        if not os.path.exists(config_dir):
+            os.makedirs(config_dir, mode=0o755)
+        
+        try:
+            with open(config_path, 'w') as f:
+                json.dump(self.config, f, indent=2)
+        except IOError as e:
+            print(f"Warning: Could not save config to {config_path}: {e}")
+    
+    def _init_url_builder(self) -> None:
+        """Initialize the URL builder with the current remote URL."""
+        try:
+            result = self._run_command(
+                ["git", "remote", "get-url", "origin"],
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            remote_url = result.stdout.strip()
+            if remote_url:
+                self.url_builder = GitPlatformURLBuilder(self.config, remote_url)
+        except subprocess.CalledProcessError:
+            # No remote URL available
+            self.url_builder = None
         
     def has_active_filters(self) -> bool:
         """Check if any filters are currently active."""
@@ -584,7 +797,6 @@ class GitBranchManager:
     
     def show_help(self, stdscr) -> None:
         """Show help screen with all commands."""
-        stdscr.clear()
         height, width = stdscr.getmaxyx()
         
         help_text = [
@@ -608,8 +820,10 @@ class GitBranchManager:
             ("", 0),
             ("View Options:", curses.A_BOLD),
             ("  r          Reload branch list", 0),
-            ("  t          Toggle remote branches", 0),
+            ("  t          Toggle remote branches (auto-fetches)", 0),
             ("  f          Fetch latest from remote", 0),
+            ("  b          Open branch in browser", 0),
+            ("  B          Open branch comparison/PR in browser", 0),
             ("", 0),
             ("Filtering:", curses.A_BOLD),
             ("  /          Search branches by name", 0),
@@ -631,26 +845,168 @@ class GitBranchManager:
             ("  Blue       Commit hashes", 0),
             ("  Red        Old branches (>1 month)", 0),
             ("", 0),
-            ("Press any key to return...", curses.A_BOLD),
+            ("↑/↓ to scroll, any other key to return...", curses.A_BOLD),
         ]
         
-        # Display help text
-        start_y = max(0, (height - len(help_text)) // 2)
-        start_x = max(5, (width - 60) // 2)  # Left margin of 5, or centered if narrow screen
+        # Scrolling support
+        scroll_offset = 0
+        max_scroll = max(0, len(help_text) - (height - 2))
         
-        for i, (text, attr) in enumerate(help_text):
-            if start_y + i < height - 1:
+        while True:
+            stdscr.clear()
+            
+            # Display help text with scrolling
+            visible_lines = height - 2  # Leave room for borders
+            start_x = max(5, (width - 60) // 2)  # Left margin of 5, or centered if narrow screen
+            
+            for i in range(visible_lines):
+                line_idx = i + scroll_offset
+                if line_idx < len(help_text):
+                    text, attr = help_text[line_idx]
+                    y_pos = i + 1
+                    
+                    if y_pos < height - 1:
+                        try:
+                            if attr:
+                                stdscr.attron(attr)
+                            stdscr.addstr(y_pos, start_x, text[:width - start_x - 1])
+                            if attr:
+                                stdscr.attroff(attr)
+                        except curses.error:
+                            pass
+            
+            # Show scroll indicator if needed
+            if max_scroll > 0:
+                scroll_pct = int((scroll_offset / max_scroll) * 100) if max_scroll > 0 else 0
+                scroll_msg = f"[{scroll_pct}%]"
                 try:
-                    if attr:
-                        stdscr.attron(attr)
-                    stdscr.addstr(start_y + i, start_x, text[:width - start_x - 1])
-                    if attr:
-                        stdscr.attroff(attr)
+                    stdscr.addstr(0, width - len(scroll_msg) - 2, scroll_msg)
                 except curses.error:
                     pass
+            
+            stdscr.refresh()
+            
+            # Handle key input
+            key = stdscr.getch()
+            if key == curses.KEY_UP:
+                scroll_offset = max(0, scroll_offset - 1)
+            elif key == curses.KEY_DOWN:
+                scroll_offset = min(max_scroll, scroll_offset + 1)
+            else:
+                break
+    
+    def show_platform_config_help(self, stdscr) -> None:
+        """Show help for configuring Git platform integration."""
+        height, width = stdscr.getmaxyx()
         
-        stdscr.refresh()
-        stdscr.getch()
+        config_path = self._get_config_path()
+        remote_url = "Not found"
+        try:
+            result = self._run_command(
+                ["git", "remote", "get-url", "origin"],
+                capture_output=True,
+                text=True,
+                check=False
+            )
+            if result.returncode == 0:
+                remote_url = result.stdout.strip()
+        except:
+            pass
+        
+        help_lines = [
+            "Git Platform Configuration Help",
+            "=" * 40,
+            "",
+            f"Current remote URL: {remote_url}",
+            f"Detected platform: {self.url_builder.platform if self.url_builder else 'None'}",
+            "",
+            f"You can configure your settings at:",
+            f"{config_path}",
+            "",
+            "Example configuration file:",
+            "{",
+            '  "platform": "bitbucket-server",  // or auto, github, gitlab, etc.',
+            '  "default_base_branch": "main",',
+            '  "browser_command": "open",',
+            '  "custom_patterns": {',
+            '    "branch": "https://git.example.com/{repo}/tree/{branch}",',
+            '    "compare": "https://git.example.com/{repo}/compare/{base}...{branch}"',
+            '  }',
+            "}",
+            "",
+            "Supported platforms and URL patterns:",
+            "",
+            "GitHub:",
+            "  branch:  https://github.com/{owner}/{repo}/tree/{branch}",
+            "  compare: https://github.com/{owner}/{repo}/compare/{base}...{branch}",
+            "",
+            "GitLab:",
+            "  branch:  https://gitlab.com/{owner}/{repo}/-/tree/{branch}",
+            "  compare: https://gitlab.com/{owner}/{repo}/-/compare/{base}...{branch}",
+            "",
+            "Bitbucket Cloud:",
+            "  branch:  https://bitbucket.org/{workspace}/{repo}/branch/{branch}",
+            "  compare: https://bitbucket.org/{workspace}/{repo}/pull-requests/new",
+            "           ?source={branch}&dest={base}",
+            "",
+            "Bitbucket Server:",
+            "  branch:  https://{domain}/projects/{project}/repos/{repo}/browse",
+            "           ?at=refs/heads/{branch}",
+            "  compare: https://{domain}/projects/{project}/repos/{repo}/compare/commits",
+            "           ?sourceBranch=refs/heads/{branch}&targetBranch=refs/heads/{base}",
+            "",
+            "↑/↓ to scroll, any other key to return..."
+        ]
+        
+        # Scrolling support
+        scroll_offset = 0
+        max_scroll = max(0, len(help_lines) - (height - 2))
+        
+        while True:
+            stdscr.clear()
+            
+            # Display help with scrolling
+            visible_lines = height - 2  # Leave room for borders
+            for i in range(visible_lines):
+                line_idx = i + scroll_offset
+                if line_idx < len(help_lines):
+                    line = help_lines[line_idx]
+                    y_pos = i + 1
+                    
+                    if y_pos < height - 1:
+                        try:
+                            if line_idx == 0:  # Title
+                                stdscr.attron(curses.A_BOLD)
+                                stdscr.addstr(y_pos, 2, line[:width - 4])
+                                stdscr.attroff(curses.A_BOLD)
+                            elif line.startswith("Supported platforms") or (line.endswith(":") and not line.startswith(" ")):
+                                stdscr.attron(curses.A_BOLD)
+                                stdscr.addstr(y_pos, 2, line[:width - 4])
+                                stdscr.attroff(curses.A_BOLD)
+                            else:
+                                stdscr.addstr(y_pos, 2, line[:width - 4])
+                        except curses.error:
+                            pass
+            
+            # Show scroll indicator if needed
+            if max_scroll > 0:
+                scroll_pct = int((scroll_offset / max_scroll) * 100) if max_scroll > 0 else 0
+                scroll_msg = f"[{scroll_pct}%]"
+                try:
+                    stdscr.addstr(0, width - len(scroll_msg) - 2, scroll_msg)
+                except curses.error:
+                    pass
+            
+            stdscr.refresh()
+            
+            # Handle key input
+            key = stdscr.getch()
+            if key == curses.KEY_UP:
+                scroll_offset = max(0, scroll_offset - 1)
+            elif key == curses.KEY_DOWN:
+                scroll_offset = min(max_scroll, scroll_offset + 1)
+            else:
+                break
     
     def show_confirmation_dialog(self, stdscr, message: str) -> Optional[str]:
         """Show a confirmation dialog with yes/no/cancel options."""
@@ -716,6 +1072,31 @@ class GitBranchManager:
             stdscr.clear()
             height, width = stdscr.getmaxyx()
             
+            # Get shortened working directory for display
+            cwd = self.working_dir
+            home = os.path.expanduser('~')
+            if cwd.startswith(home):
+                cwd = '~' + cwd[len(home):]
+            
+            # Check if we're in a worktree
+            worktree_info = ""
+            try:
+                # Check if this is a worktree
+                result = self._run_command(
+                    ["git", "rev-parse", "--show-toplevel"],
+                    capture_output=True,
+                    text=True,
+                    check=False
+                )
+                if result.returncode == 0:
+                    git_dir = result.stdout.strip()
+                    # Check if it's a worktree by looking for .git file (not directory)
+                    git_path = os.path.join(git_dir, '.git')
+                    if os.path.isfile(git_path):
+                        worktree_info = " [worktree]"
+            except:
+                pass
+            
             # Header
             header = "Git Branch Manager - Press ? for help"
             if self.show_remotes:
@@ -737,11 +1118,20 @@ class GitBranchManager:
             if filters:
                 header += f" [Filters: {', '.join(filters)}]"
             
+            # First line: main header
             stdscr.addstr(0, 0, header[:width-1])
-            stdscr.addstr(1, 0, "-" * min(len(header), width-1))
+            
+            # Second line: working directory
+            dir_line = f"Directory: {cwd}{worktree_info}"
+            if len(dir_line) > width - 1:
+                # Truncate from the left if too long, keeping the end visible
+                dir_line = "..." + dir_line[-(width - 4):]
+            stdscr.addstr(1, 0, dir_line[:width-1], curses.color_pair(8))
+            
+            stdscr.addstr(2, 0, "-" * min(max(len(header), len(dir_line)), width-1))
             
             # Display branches
-            start_y = 3
+            start_y = 4  # Increased from 3 to account for directory line
             visible_branches = min(height - start_y - 1, len(self.filtered_branches))
             
             # Calculate scroll position
@@ -1104,6 +1494,94 @@ class GitBranchManager:
                         stdscr.addstr(2, 0, "Press any key to continue...")
                         stdscr.refresh()
                         stdscr.getch()
+            elif key == ord('B'):  # Shift+B for opening branch in browser (compare/PR)
+                if not self.filtered_branches or not self.url_builder:
+                    if not self.url_builder:
+                        stdscr.clear()
+                        stdscr.addstr(0, 0, "No remote repository URL found!")
+                        stdscr.addstr(1, 0, "Make sure you have a remote named 'origin' configured.")
+                        stdscr.addstr(2, 0, "")
+                        stdscr.addstr(3, 0, "Press 'h' for configuration help, any other key to continue...")
+                        stdscr.refresh()
+                        key = stdscr.getch()
+                        if key == ord('h') or key == ord('H'):
+                            self.show_platform_config_help(stdscr)
+                    continue
+                
+                selected_branch = self.filtered_branches[self.selected_index].name
+                # For remote branches, use the local branch name
+                if '/' in selected_branch:
+                    branch_name = selected_branch.split('/', 1)[1]
+                else:
+                    branch_name = selected_branch
+                
+                # Build compare URL
+                url = self.url_builder.build_compare_url(branch_name)
+                if url:
+                    try:
+                        # Use the configured browser command
+                        browser_cmd = self.config.get('browser_command', 'open')
+                        self._run_command([browser_cmd, url], check=True)
+                    except subprocess.CalledProcessError:
+                        stdscr.clear()
+                        stdscr.addstr(0, 0, f"Failed to open browser!")
+                        stdscr.addstr(1, 0, f"URL: {url}")
+                        stdscr.addstr(2, 0, "Press any key to continue...")
+                        stdscr.refresh()
+                        stdscr.getch()
+                else:
+                    stdscr.clear()
+                    stdscr.addstr(0, 0, f"Platform '{self.url_builder.platform}' not supported for compare URLs")
+                    stdscr.addstr(1, 0, "")
+                    stdscr.addstr(2, 0, "Press 'h' for configuration help, any other key to continue...")
+                    stdscr.refresh()
+                    key = stdscr.getch()
+                    if key == ord('h') or key == ord('H'):
+                        self.show_platform_config_help(stdscr)
+            elif key == ord('b'):  # lowercase b for opening branch view
+                if not self.filtered_branches or not self.url_builder:
+                    if not self.url_builder:
+                        stdscr.clear()
+                        stdscr.addstr(0, 0, "No remote repository URL found!")
+                        stdscr.addstr(1, 0, "Make sure you have a remote named 'origin' configured.")
+                        stdscr.addstr(2, 0, "")
+                        stdscr.addstr(3, 0, "Press 'h' for configuration help, any other key to continue...")
+                        stdscr.refresh()
+                        key = stdscr.getch()
+                        if key == ord('h') or key == ord('H'):
+                            self.show_platform_config_help(stdscr)
+                    continue
+                
+                selected_branch = self.filtered_branches[self.selected_index].name
+                # For remote branches, use the local branch name
+                if '/' in selected_branch:
+                    branch_name = selected_branch.split('/', 1)[1]
+                else:
+                    branch_name = selected_branch
+                
+                # Build branch URL
+                url = self.url_builder.build_branch_url(branch_name)
+                if url:
+                    try:
+                        # Use the configured browser command
+                        browser_cmd = self.config.get('browser_command', 'open')
+                        self._run_command([browser_cmd, url], check=True)
+                    except subprocess.CalledProcessError:
+                        stdscr.clear()
+                        stdscr.addstr(0, 0, f"Failed to open browser!")
+                        stdscr.addstr(1, 0, f"URL: {url}")
+                        stdscr.addstr(2, 0, "Press any key to continue...")
+                        stdscr.refresh()
+                        stdscr.getch()
+                else:
+                    stdscr.clear()
+                    stdscr.addstr(0, 0, f"Platform '{self.url_builder.platform}' not supported for branch URLs")
+                    stdscr.addstr(1, 0, "")
+                    stdscr.addstr(2, 0, "Press 'h' for configuration help, any other key to continue...")
+                    stdscr.refresh()
+                    key = stdscr.getch()
+                    if key == ord('h') or key == ord('H'):
+                        self.show_platform_config_help(stdscr)
             elif key == ord('\n') or key == curses.KEY_ENTER:
                 if not self.filtered_branches:
                     continue
