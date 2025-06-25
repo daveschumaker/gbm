@@ -326,6 +326,12 @@ class GitBranchManager:
         # Set up colors
         curses.init_pair(1, curses.COLOR_BLACK, curses.COLOR_WHITE)  # Selected
         curses.init_pair(2, curses.COLOR_GREEN, curses.COLOR_BLACK)  # Current branch
+        curses.init_pair(3, curses.COLOR_YELLOW, curses.COLOR_BLACK)  # Modified indicator
+        curses.init_pair(4, curses.COLOR_CYAN, curses.COLOR_BLACK)  # Branch name
+        curses.init_pair(5, curses.COLOR_MAGENTA, curses.COLOR_BLACK)  # Recent branches (< 1 week)
+        curses.init_pair(6, curses.COLOR_BLUE, curses.COLOR_BLACK)  # Hash
+        curses.init_pair(7, curses.COLOR_RED, curses.COLOR_BLACK)  # Old branches (> 1 month)
+        curses.init_pair(8, curses.COLOR_WHITE, curses.COLOR_BLACK)  # Normal text
         
         self.get_branches()
         
@@ -356,32 +362,102 @@ class GitBranchManager:
                 branch_info = self.branches[branch_index]
                 y = start_y + i
                 
-                # Prepare display string with branch info
+                # Prepare display components
                 prefix = "* " if branch_info.is_current else "  "
                 relative_date = branch_info.format_relative_date()
                 
-                # Add modified indicator
-                modified_indicator = " [modified]" if branch_info.has_uncommitted_changes else ""
+                # Determine age-based color for branch
+                days_old = (datetime.now() - branch_info.commit_date).days
+                if days_old < 7:
+                    date_color = 5  # Magenta for recent
+                elif days_old > 30:
+                    date_color = 7  # Red for old
+                else:
+                    date_color = 8  # White for normal
                 
                 # Truncate commit message if needed
-                max_msg_len = width - len(branch_info.name) - len(relative_date) - len(branch_info.commit_hash) - len(modified_indicator) - 10
+                separator = " • "
+                modified_indicator = " [modified]" if branch_info.has_uncommitted_changes else ""
+                
+                # Calculate available space for commit message
+                fixed_len = len(prefix) + len(branch_info.name) + len(modified_indicator) + len(separator) * 3 + len(relative_date) + len(branch_info.commit_hash)
+                max_msg_len = width - fixed_len - 1
                 commit_msg = branch_info.commit_message
                 if len(commit_msg) > max_msg_len and max_msg_len > 3:
                     commit_msg = commit_msg[:max_msg_len-3] + "..."
                 
-                display_str = f"{prefix}{branch_info.name}{modified_indicator} • {relative_date} • {branch_info.commit_hash} • {commit_msg}"
+                # Display with colors
+                x_pos = 0
                 
-                # Apply highlighting
                 if branch_index == self.selected_index:
+                    # Selected row - inverse video
                     stdscr.attron(curses.color_pair(1))
-                    stdscr.addstr(y, 0, display_str[:width-1].ljust(width-1))
+                    stdscr.addstr(y, 0, " " * (width - 1))  # Fill background
+                    stdscr.addstr(y, x_pos, prefix)
+                    x_pos += len(prefix)
+                    stdscr.addstr(y, x_pos, branch_info.name)
+                    x_pos += len(branch_info.name)
+                    if modified_indicator:
+                        stdscr.addstr(y, x_pos, modified_indicator)
+                        x_pos += len(modified_indicator)
+                    stdscr.addstr(y, x_pos, separator)
+                    x_pos += len(separator)
+                    stdscr.addstr(y, x_pos, relative_date)
+                    x_pos += len(relative_date)
+                    stdscr.addstr(y, x_pos, separator)
+                    x_pos += len(separator)
+                    stdscr.addstr(y, x_pos, branch_info.commit_hash)
+                    x_pos += len(branch_info.commit_hash)
+                    stdscr.addstr(y, x_pos, separator)
+                    x_pos += len(separator)
+                    stdscr.addstr(y, x_pos, commit_msg)
                     stdscr.attroff(curses.color_pair(1))
-                elif branch_info.is_current:
-                    stdscr.attron(curses.color_pair(2))
-                    stdscr.addstr(y, 0, display_str[:width-1])
-                    stdscr.attroff(curses.color_pair(2))
                 else:
-                    stdscr.addstr(y, 0, display_str[:width-1])
+                    # Non-selected rows with colors
+                    stdscr.addstr(y, x_pos, prefix)
+                    x_pos += len(prefix)
+                    
+                    # Branch name color
+                    if branch_info.is_current:
+                        stdscr.attron(curses.color_pair(2))
+                        stdscr.addstr(y, x_pos, branch_info.name)
+                        stdscr.attroff(curses.color_pair(2))
+                    else:
+                        stdscr.attron(curses.color_pair(4))
+                        stdscr.addstr(y, x_pos, branch_info.name)
+                        stdscr.attroff(curses.color_pair(4))
+                    x_pos += len(branch_info.name)
+                    
+                    # Modified indicator
+                    if modified_indicator:
+                        stdscr.attron(curses.color_pair(3))
+                        stdscr.addstr(y, x_pos, modified_indicator)
+                        stdscr.attroff(curses.color_pair(3))
+                        x_pos += len(modified_indicator)
+                    
+                    stdscr.addstr(y, x_pos, separator)
+                    x_pos += len(separator)
+                    
+                    # Date with age-based color
+                    stdscr.attron(curses.color_pair(date_color))
+                    stdscr.addstr(y, x_pos, relative_date)
+                    stdscr.attroff(curses.color_pair(date_color))
+                    x_pos += len(relative_date)
+                    
+                    stdscr.addstr(y, x_pos, separator)
+                    x_pos += len(separator)
+                    
+                    # Commit hash
+                    stdscr.attron(curses.color_pair(6))
+                    stdscr.addstr(y, x_pos, branch_info.commit_hash)
+                    stdscr.attroff(curses.color_pair(6))
+                    x_pos += len(branch_info.commit_hash)
+                    
+                    stdscr.addstr(y, x_pos, separator)
+                    x_pos += len(separator)
+                    
+                    # Commit message
+                    stdscr.addstr(y, x_pos, commit_msg)
                     
             stdscr.refresh()
             
