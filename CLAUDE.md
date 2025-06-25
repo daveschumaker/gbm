@@ -14,9 +14,11 @@ Git Branch Manager is a terminal-based (TUI) Git branch management tool written 
 - **Visual Indicators**: Current branch (*), remote branches (↓), modified files
 - **Stash Management**: Automatic prompt to stash changes when switching branches
 - **Stash Recovery**: Track and recover last stash with 'S' key
+- **Branch-Specific Stash Detection**: Automatically detects and offers to apply git-branch-manager stashes when switching branches
 - **Remote Branch Support**: Toggle viewing and checkout remote branches
 - **Branch Creation**: Create new branches with 'N' key
 - **Branch Protection**: Extra confirmation for deleting main/master branches
+- **Worktree Support**: Shows [worktree] indicator and prevents checkout of branches in other worktrees
 - **Performance Optimized**: Uses batch operations for fast loading in large repos
 - **Browser Integration**: Open branches in web browser (GitHub, GitLab, Bitbucket, etc.)
 - **Push Status Detection**: Shows [unpushed] indicator for local branches not on remote
@@ -36,6 +38,7 @@ Git Branch Manager is a terminal-based (TUI) Git branch management tool written 
 
 1. **BranchInfo (NamedTuple)**
    - Stores branch metadata: name, commit info, uncommitted changes flag, remote info
+   - Includes fields for: has_upstream, is_merged, in_worktree
    - Has method for formatting relative dates
    - No longer includes merge/PR status (removed for performance)
 
@@ -56,6 +59,7 @@ Git Branch Manager is a terminal-based (TUI) Git branch management tool written 
 - `_get_batch_branch_info()`: Uses git for-each-ref for performance
 - `_get_remote_branches_set()`: Gets all branches that exist on remotes
 - `_get_merged_branches_set()`: Gets branches merged into main/master
+- `_get_branch_stashes()`: Detects git-branch-manager created stashes for a branch
 - `safe_addstr()`: Prevents terminal width overflow errors
 - `has_active_filters()` / `clear_all_filters()`: Filter management
 - `checkout_branch()`: Handles local and remote checkouts
@@ -114,6 +118,7 @@ Git Branch Manager is a terminal-based (TUI) Git branch management tool written 
   - `[modified]` for uncommitted changes
   - `[unpushed]` for local branches not on remote
   - `[merged]` for branches merged into main/master
+  - `[worktree]` for branches checked out in other worktrees
 - **Header Indicators**: 
   - `[Stash: stash@{0}]` when a stash is available to pop
   - Current working directory with `[worktree]` indicator if applicable
@@ -168,6 +173,7 @@ Git Branch Manager is a terminal-based (TUI) Git branch management tool written 
 ## Recent Features Added
 - **Stash Tracking**: The app now tracks the last stash it creates and shows it in the header
 - **Stash Recovery**: Press 'S' to pop the last stash created by the app
+- **Branch-Specific Stash Recovery**: Automatically detects and offers to apply git-branch-manager stashes when switching to a branch
 - **Branch Protection**: Main and master branches require extra confirmation before deletion
 - **Branch Creation**: Press 'N' to create a new branch with optional checkout
 - **Browser Integration**: Press 'b' to open branch in browser, 'B' for compare/PR view
@@ -176,6 +182,8 @@ Git Branch Manager is a terminal-based (TUI) Git branch management tool written 
 - **Push Status Detection**: Shows [unpushed] indicator and prevents browser opening for unpushed branches
 - **Merge Status Detection**: Shows [merged] indicator and 'm' filter to hide merged branches
 - **Working Directory Display**: Shows current directory in header with worktree detection
+- **Worktree Branch Support**: Shows branches in worktrees with [worktree] indicator and prevents checkout
+- **Worktree Safety**: Prevents checking out branches that are already checked out in other worktrees
 
 ## Future Enhancement Ideas
 - Multiple selection for bulk operations
@@ -236,6 +244,7 @@ git branch -d <branch>              # Delete branch
 git branch -m <old> <new>           # Rename branch
 git status --porcelain              # Check for uncommitted changes
 git stash push -m "message"         # Stash changes
+git stash list --format="%gd|%s"   # List stashes with custom format
 git stash list -1                   # Get last stash reference
 git stash pop stash@{0}             # Pop specific stash
 git branch <name>                   # Create new branch
