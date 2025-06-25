@@ -19,9 +19,11 @@ Git Branch Manager is a terminal-based (TUI) Git branch management tool written 
 - **Branch Protection**: Extra confirmation for deleting main/master branches
 - **Performance Optimized**: Uses batch operations for fast loading in large repos
 - **Browser Integration**: Open branches in web browser (GitHub, GitLab, Bitbucket, etc.)
+- **Push Status Detection**: Shows [unpushed] indicator for local branches not on remote
+- **Merge Status Detection**: Shows [merged] indicator for branches merged into main/master
 
 ### Advanced Features
-- **Branch Filtering**: Search by name, author, age, or prefix
+- **Branch Filtering**: Search by name, author, age, prefix, or merged status
 - **Smart Sorting**: Branches sorted by most recent commits first
 - **Color Coding**: Age-based coloring for quick visual scanning
 - **Help System**: Built-in help screen (?)
@@ -52,12 +54,15 @@ Git Branch Manager is a terminal-based (TUI) Git branch management tool written 
 ### Key Methods
 - `get_branches()`: Fetches branches using optimized batch operations
 - `_get_batch_branch_info()`: Uses git for-each-ref for performance
+- `_get_remote_branches_set()`: Gets all branches that exist on remotes
+- `_get_merged_branches_set()`: Gets branches merged into main/master
 - `safe_addstr()`: Prevents terminal width overflow errors
 - `has_active_filters()` / `clear_all_filters()`: Filter management
 - `checkout_branch()`: Handles local and remote checkouts
 - `delete_branch()`: Safe branch deletion with force fallback
 - `move_branch()`: Rename/move branches
-- `show_help()`: Display help screen
+- `show_help()`: Display help screen with scrolling support
+- `show_platform_config_help()`: Shows Git platform configuration help
 - `run()`: Main curses event loop
 
 ## Git Integration
@@ -96,6 +101,7 @@ Git Branch Manager is a terminal-based (TUI) Git branch management tool written 
 - `/`: Search branches by name
 - `a`: Toggle author filter (show only your branches)
 - `o`: Toggle old branches filter (hide >3 months)
+- `m`: Toggle merged filter (hide merged branches)
 - `p`: Filter by prefix (feature/, bugfix/, etc)
 - `c`: Clear all filters
 - `?`: Show help
@@ -104,8 +110,13 @@ Git Branch Manager is a terminal-based (TUI) Git branch management tool written 
 
 ### Visual Elements
 - **Prefixes**: `*` (current), `↓` (remote), `  ` (local)
-- **Status Tags**: `[modified]` for uncommitted changes
-- **Header Indicators**: `[Stash: stash@{0}]` when a stash is available to pop
+- **Status Tags**: 
+  - `[modified]` for uncommitted changes
+  - `[unpushed]` for local branches not on remote
+  - `[merged]` for branches merged into main/master
+- **Header Indicators**: 
+  - `[Stash: stash@{0}]` when a stash is available to pop
+  - Current working directory with `[worktree]` indicator if applicable
 - **Colors**: 
   - Green: Current branch
   - Cyan: Branch names
@@ -162,6 +173,9 @@ Git Branch Manager is a terminal-based (TUI) Git branch management tool written 
 - **Browser Integration**: Press 'b' to open branch in browser, 'B' for compare/PR view
 - **Auto-fetch on Remote Toggle**: Pressing 't' now automatically fetches before showing remotes
 - **Multi-platform Browser Support**: Automatically detects GitHub, GitLab, Bitbucket, Azure DevOps, etc.
+- **Push Status Detection**: Shows [unpushed] indicator and prevents browser opening for unpushed branches
+- **Merge Status Detection**: Shows [merged] indicator and 'm' filter to hide merged branches
+- **Working Directory Display**: Shows current directory in header with worktree detection
 
 ## Future Enhancement Ideas
 - Multiple selection for bulk operations
