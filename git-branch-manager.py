@@ -23,6 +23,7 @@ class BranchInfo(NamedTuple):
     is_remote: bool
     remote_name: Optional[str]
     has_upstream: bool  # True if branch exists on remote
+    is_merged: bool  # True if branch has been merged into main/master
     
     def format_relative_date(self) -> str:
         """Format the commit date as a relative time string."""
@@ -212,6 +213,7 @@ class GitBranchManager:
         self.author_filter: bool = False  # Show only current user's branches
         self.age_filter: bool = False  # Hide old branches (>3 months)
         self.prefix_filter: str = ""  # Filter by prefix
+        self.merged_filter: bool = False  # Hide merged branches
         self.current_user: Optional[str] = self._get_current_user()
         self.last_stash_ref: Optional[str] = None  # Track last stash created
         self.protected_branches: List[str] = ["main", "master"]  # Protected branches
@@ -280,7 +282,7 @@ class GitBranchManager:
         
     def has_active_filters(self) -> bool:
         """Check if any filters are currently active."""
-        return bool(self.search_filter or self.author_filter or self.age_filter or self.prefix_filter)
+        return bool(self.search_filter or self.author_filter or self.age_filter or self.prefix_filter or self.merged_filter)
     
     def clear_all_filters(self) -> None:
         """Clear all active filters."""
@@ -288,6 +290,7 @@ class GitBranchManager:
         self.author_filter = False
         self.age_filter = False
         self.prefix_filter = ""
+        self.merged_filter = False
         self._apply_filters()
         self.selected_index = 0
         
@@ -455,6 +458,31 @@ class GitBranchManager:
         
         return remote_branches
     
+    def _get_merged_branches_set(self, base_branch: str) -> set:
+        """Get a set of all branch names that have been merged into the base branch."""
+        merged_branches = set()
+        try:
+            # Get branches merged into the base branch
+            result = self._run_command(
+                ["git", "branch", "--merged", base_branch],
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            
+            for line in result.stdout.strip().split('\n'):
+                if line.strip():
+                    branch = line.strip()
+                    # Remove the * prefix for current branch
+                    if branch.startswith('* '):
+                        branch = branch[2:]
+                    merged_branches.add(branch)
+            
+        except subprocess.CalledProcessError:
+            pass
+        
+        return merged_branches
+    
     def safe_addstr(self, stdscr, y: int, x: int, text: str, attr: int = 0) -> int:
         """Safely add string to screen, truncating if necessary. Returns new x position."""
         height, width = stdscr.getmaxyx()
@@ -573,6 +601,19 @@ class GitBranchManager:
             # Get set of branches that exist on remote
             remote_branch_names = self._get_remote_branches_set()
             
+            # Get set of branches that have been merged into main/master
+            # Use the configured default base branch, falling back to main or master
+            base_branch = self.config.get('default_base_branch', 'main')
+            # If configured base doesn't exist, try to find main or master
+            all_local_branches = {b[0] for b in all_branches if not b[1]}
+            if base_branch not in all_local_branches:
+                if 'main' in all_local_branches:
+                    base_branch = 'main'
+                elif 'master' in all_local_branches:
+                    base_branch = 'master'
+            
+            merged_branch_names = self._get_merged_branches_set(base_branch)
+            
             # Build BranchInfo objects
             for branch_name, is_remote, remote_name in all_branches:
                 if branch_name in batch_info:
@@ -586,6 +627,9 @@ class GitBranchManager:
                         # Check if this local branch exists on any remote
                         has_upstream = branch_name in remote_branch_names
                     
+                    # Check if branch has been merged
+                    is_merged = branch_name in merged_branch_names
+                    
                     branch_info = BranchInfo(
                         name=branch_name,
                         is_current=(branch_name == self.current_branch),
@@ -596,7 +640,8 @@ class GitBranchManager:
                         has_uncommitted_changes=(has_uncommitted if branch_name == self.current_branch else False),
                         is_remote=is_remote,
                         remote_name=remote_name,
-                        has_upstream=has_upstream
+                        has_upstream=has_upstream,
+                        is_merged=is_merged
                     )
                     self.branches.append(branch_info)
             
@@ -641,6 +686,13 @@ class GitBranchManager:
             self.filtered_branches = [
                 b for b in self.filtered_branches 
                 if b.name.startswith(self.prefix_filter)
+            ]
+        
+        # Merged filter (hide merged branches)
+        if self.merged_filter:
+            self.filtered_branches = [
+                b for b in self.filtered_branches 
+                if not b.is_merged or b.is_current
             ]
         
         # Adjust selected index if it's out of bounds
@@ -869,6 +921,7 @@ class GitBranchManager:
             ("  /          Search branches by name", 0),
             ("  a          Toggle author filter (show only your branches)", 0),
             ("  o          Toggle old branches filter (hide >3 months)", 0),
+            ("  m          Toggle merged filter (hide merged branches)", 0),
             ("  p          Filter by prefix (feature/, bugfix/, etc)", 0),
             ("  c          Clear all filters", 0),
             ("", 0),
@@ -877,6 +930,7 @@ class GitBranchManager:
             ("  ↓          Remote branch", 0),
             ("  [modified] Uncommitted changes", 0),
             ("  [unpushed] Local branch not on remote", 0),
+            ("  [merged]   Branch merged into main/master", 0),
             ("", 0),
             ("Color Coding:", curses.A_BOLD),
             ("  Green      Current branch", 0),
@@ -1155,6 +1209,8 @@ class GitBranchManager:
                 filters.append("age:<3m")
             if self.prefix_filter:
                 filters.append(f"prefix:{self.prefix_filter}")
+            if self.merged_filter:
+                filters.append("hide:merged")
             
             if filters:
                 header += f" [Filters: {', '.join(filters)}]"
@@ -1214,9 +1270,13 @@ class GitBranchManager:
                 unpushed_indicator = ""
                 if not branch_info.is_remote and not branch_info.has_upstream:
                     unpushed_indicator = " [unpushed]"
+                # Add merged indicator
+                merged_indicator = ""
+                if branch_info.is_merged and not branch_info.is_current and not branch_info.is_remote:
+                    merged_indicator = " [merged]"
                 
                 # Calculate available space for commit message
-                fixed_len = len(prefix) + len(branch_info.name) + len(modified_indicator) + len(unpushed_indicator) + len(separator) * 3 + len(relative_date) + len(branch_info.commit_hash)
+                fixed_len = len(prefix) + len(branch_info.name) + len(modified_indicator) + len(unpushed_indicator) + len(merged_indicator) + len(separator) * 3 + len(relative_date) + len(branch_info.commit_hash)
                 max_msg_len = width - fixed_len - 1
                 commit_msg = branch_info.commit_message
                 if len(commit_msg) > max_msg_len and max_msg_len > 3:
@@ -1238,6 +1298,8 @@ class GitBranchManager:
                         x_pos = self.safe_addstr(stdscr, y, x_pos, modified_indicator)
                     if unpushed_indicator:
                         x_pos = self.safe_addstr(stdscr, y, x_pos, unpushed_indicator)
+                    if merged_indicator:
+                        x_pos = self.safe_addstr(stdscr, y, x_pos, merged_indicator)
                     x_pos = self.safe_addstr(stdscr, y, x_pos, separator)
                     x_pos = self.safe_addstr(stdscr, y, x_pos, relative_date)
                     x_pos = self.safe_addstr(stdscr, y, x_pos, separator)
@@ -1262,6 +1324,10 @@ class GitBranchManager:
                     # Unpushed indicator
                     if unpushed_indicator:
                         x_pos = self.safe_addstr(stdscr, y, x_pos, unpushed_indicator, curses.color_pair(3))
+                    
+                    # Merged indicator - use green color
+                    if merged_indicator:
+                        x_pos = self.safe_addstr(stdscr, y, x_pos, merged_indicator, curses.color_pair(2))
                     
                     x_pos = self.safe_addstr(stdscr, y, x_pos, separator)
                     
@@ -1366,6 +1432,11 @@ class GitBranchManager:
                     self.selected_index = max(0, len(self.filtered_branches) - 1)
             elif key == ord('o') or key == ord('O'):  # Old branches filter
                 self.age_filter = not self.age_filter
+                self._apply_filters()
+                if self.selected_index >= len(self.filtered_branches):
+                    self.selected_index = max(0, len(self.filtered_branches) - 1)
+            elif key == ord('m'):  # lowercase m for merged filter (uppercase M is for rename)
+                self.merged_filter = not self.merged_filter
                 self._apply_filters()
                 if self.selected_index >= len(self.filtered_branches):
                     self.selected_index = max(0, len(self.filtered_branches) - 1)
