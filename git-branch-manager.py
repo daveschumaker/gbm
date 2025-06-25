@@ -714,6 +714,80 @@ class GitBranchManager:
         
         return x + len(text)
     
+    def draw_footer(self, stdscr, height: int, width: int) -> None:
+        """Draw the fixed footer with command shortcuts.
+        
+        Creates a nano/micro-style footer with commonly used commands.
+        Adapts to terminal width by showing more or fewer commands.
+        
+        Args:
+            stdscr: Curses screen object
+            height: Terminal height
+            width: Terminal width
+        """
+        # Footer position (bottom two lines)
+        separator_y = height - 2
+        footer_y = height - 1
+        
+        # Draw separator line with proper box drawing characters
+        try:
+            # Use box drawing characters for a more professional look
+            separator_line = "─" * (width - 1)
+            stdscr.addstr(separator_y, 0, separator_line, curses.color_pair(8))
+        except curses.error:
+            pass
+        
+        # Define footer commands
+        # Format: (key display, command name, condition for showing)
+        all_commands = [
+            ("?", "Help", True),
+            ("q", "Exit", True),
+            ("↵", "Checkout", len(self.filtered_branches) > 0),
+            ("t", "Remote", True),
+            ("r", "Refresh", True),
+            ("N", "New", True),
+            ("D", "Delete", len(self.filtered_branches) > 0),
+            ("b", "Browser", self.url_builder is not None),
+            ("/", "Search", True),
+            ("S", "Pop Stash", self.last_stash_ref is not None),
+            ("f", "Fetch", True),
+            ("a", "Author", True),
+        ]
+        
+        # Filter commands based on conditions
+        commands = [(k, c) for k, c, show in all_commands if show]
+        
+        # Build footer text
+        footer_parts = []
+        for key, cmd in commands:
+            footer_parts.append(f"{key} {cmd}")
+        
+        # Join with spacing
+        footer_text = "  ".join(footer_parts)
+        
+        # Truncate if too long
+        if len(footer_text) > width - 2:
+            # Show only the most important commands
+            essential_commands = commands[:6]  # First 6 commands
+            footer_parts = [f"{k} {c}" for k, c in essential_commands]
+            footer_text = "  ".join(footer_parts)
+            if len(footer_text) > width - 2:
+                footer_text = footer_text[:width - 5] + "..."
+        
+        # Draw footer with color
+        try:
+            stdscr.attron(curses.color_pair(9))
+            # Clear the line first
+            stdscr.addstr(footer_y, 0, " " * (width - 1))
+            # Center the text
+            x_start = (width - len(footer_text)) // 2
+            if x_start < 0:
+                x_start = 1
+            stdscr.addstr(footer_y, x_start, footer_text)
+            stdscr.attroff(curses.color_pair(9))
+        except curses.error:
+            pass
+    
     def show_loading_message(self, stdscr, message: str) -> None:
         """Show a loading message in the center of the screen.
         
@@ -1356,7 +1430,8 @@ class GitBranchManager:
             stdscr.clear()
             
             # Display help with scrolling
-            visible_lines = height - 2  # Leave room for borders
+            footer_height = 2  # Account for footer
+            visible_lines = height - footer_height - 2  # Leave room for borders and footer
             for i in range(visible_lines):
                 line_idx = i + scroll_offset
                 if line_idx < len(help_lines):
@@ -1473,6 +1548,7 @@ class GitBranchManager:
         curses.init_pair(6, curses.COLOR_BLUE, curses.COLOR_BLACK)  # Hash
         curses.init_pair(7, curses.COLOR_RED, curses.COLOR_BLACK)  # Old branches (> 1 month)
         curses.init_pair(8, curses.COLOR_WHITE, curses.COLOR_BLACK)  # Normal text
+        curses.init_pair(9, curses.COLOR_BLACK, curses.COLOR_CYAN)  # Footer
         
         self.get_branches(stdscr)
         
@@ -1538,11 +1614,12 @@ class GitBranchManager:
                 dir_line = "..." + dir_line[-(width - 4):]
             stdscr.addstr(1, 0, dir_line[:width-1], curses.color_pair(8))
             
-            stdscr.addstr(2, 0, "-" * min(max(len(header), len(dir_line)), width-1))
+            stdscr.addstr(2, 0, "─" * min(max(len(header), len(dir_line)), width-1), curses.color_pair(8))
             
             # Display branches
             start_y = 4  # Increased from 3 to account for directory line
-            visible_branches = min(height - start_y - 1, len(self.filtered_branches))
+            footer_height = 2  # Footer takes 2 lines (separator + commands)
+            visible_branches = min(height - start_y - footer_height - 1, len(self.filtered_branches))
             
             # Calculate scroll position
             if self.selected_index >= visible_branches:
@@ -1666,7 +1743,10 @@ class GitBranchManager:
                     
                     # Commit message
                     x_pos = self.safe_addstr(stdscr, y, x_pos, commit_msg)
-                    
+            
+            # Draw footer
+            self.draw_footer(stdscr, height, width)
+            
             stdscr.refresh()
             
             # Handle key press
