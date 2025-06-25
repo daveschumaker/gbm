@@ -134,11 +134,12 @@ Git Branch Manager is a terminal-based (TUI) Git branch management tool written 
 ## Development Guidelines
 
 ### Code Style
-- No comments unless specifically requested
+- No comments unless specifically requested (docstrings are allowed and encouraged)
 - Use type hints (typing module)
 - Handle errors gracefully
 - Use subprocess for git commands
 - Follow existing patterns in the codebase
+- Use comprehensive Python docstrings for all functions and classes
 
 ### Testing Approach
 - Manual testing via terminal

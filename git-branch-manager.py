@@ -53,16 +53,40 @@ class BranchInfo(NamedTuple):
             return f"{years} year{'s' if years != 1 else ''} ago"
 
 class GitPlatformURLBuilder:
-    """Builds URLs for different Git hosting platforms."""
+    """Builds URLs for different Git hosting platforms.
+    
+    Supports GitHub, GitLab, Bitbucket (Cloud & Server), Azure DevOps,
+    and custom platforms via configuration.
+    
+    Attributes:
+        config: Configuration dictionary containing platform settings
+        remote_url: The Git remote URL to parse
+        platform: Detected or configured platform name
+        repo_info: Parsed repository information (owner, repo, etc.)
+    """
     
     def __init__(self, config: Dict[str, Any], remote_url: str):
+        """Initialize the URL builder with config and remote URL.
+        
+        Args:
+            config: Configuration dict with optional 'platform', 'custom_patterns' keys
+            remote_url: Git remote URL (SSH or HTTPS format)
+        """
         self.config = config
         self.remote_url = remote_url
         self.platform = self._detect_platform()
         self.repo_info = self._parse_remote_url()
     
     def _detect_platform(self) -> str:
-        """Detect the Git hosting platform from the remote URL."""
+        """Detect the Git hosting platform from the remote URL.
+        
+        Checks config for manual platform setting first, then auto-detects
+        based on URL patterns.
+        
+        Returns:
+            Platform identifier: 'github', 'gitlab', 'bitbucket-cloud',
+            'bitbucket-server', 'azure-devops', 'custom', or 'unknown'
+        """
         if self.config.get('platform') != 'auto':
             return self.config.get('platform', 'unknown')
         
@@ -85,7 +109,19 @@ class GitPlatformURLBuilder:
             return 'unknown'
     
     def _parse_remote_url(self) -> Dict[str, str]:
-        """Parse the remote URL to extract repository information."""
+        """Parse the remote URL to extract repository information.
+        
+        Handles both SSH (git@) and HTTPS URL formats. Extracts domain,
+        owner/organization, repository name, and other platform-specific info.
+        
+        Returns:
+            Dictionary containing parsed URL components:
+            - domain: The host domain
+            - owner: Repository owner or organization
+            - repo: Repository name
+            - project: Project key (Bitbucket Server)
+            - org: Organization (Azure DevOps)
+        """
         info = {}
         
         # Remove git@ prefix and .git suffix
@@ -146,7 +182,18 @@ class GitPlatformURLBuilder:
         return info
     
     def build_branch_url(self, branch_name: str) -> Optional[str]:
-        """Build URL to view a specific branch."""
+        """Build URL to view a specific branch on the Git platform.
+        
+        Generates platform-specific URLs for viewing branch content.
+        Handles URL encoding for branch names with special characters.
+        
+        Args:
+            branch_name: Name of the branch to view
+            
+        Returns:
+            URL string for viewing the branch, or None if platform not supported
+            or repository info not available
+        """
         if not self.repo_info:
             return None
         
@@ -172,7 +219,19 @@ class GitPlatformURLBuilder:
         return None
     
     def build_compare_url(self, branch_name: str, base_branch: Optional[str] = None) -> Optional[str]:
-        """Build URL to compare branch with base branch or create PR."""
+        """Build URL to compare branch with base branch or create PR.
+        
+        Generates platform-specific URLs for comparing branches or creating
+        pull/merge requests. Uses configured default base branch if none specified.
+        
+        Args:
+            branch_name: Source branch to compare
+            base_branch: Target branch to compare against (defaults to config setting)
+            
+        Returns:
+            URL string for comparing branches, or None if platform not supported
+            or repository info not available
+        """
         if not self.repo_info:
             return None
         
@@ -201,7 +260,31 @@ class GitPlatformURLBuilder:
         return None
 
 class GitBranchManager:
+    """Main application class for managing Git branches through a TUI.
+    
+    Provides an interactive terminal interface for viewing, filtering,
+    and managing Git branches with support for stashing, worktrees,
+    and multiple Git hosting platforms.
+    
+    Attributes:
+        branches: Complete list of all branches
+        filtered_branches: Currently visible branches after filtering
+        current_branch: Name of the currently checked out branch
+        selected_index: Current cursor position in the branch list
+        show_remotes: Whether to display remote branches
+        search_filter: Current search string
+        author_filter: Whether to show only current user's branches
+        age_filter: Whether to hide old branches
+        prefix_filter: Branch prefix to filter by
+        merged_filter: Whether to hide merged branches
+    """
+    
     def __init__(self):
+        """Initialize the Git Branch Manager with default settings.
+        
+        Sets up branch lists, filters, configuration, and attempts to
+        detect the Git hosting platform from the remote URL.
+        """
         self.branches: List[BranchInfo] = []
         self.filtered_branches: List[BranchInfo] = []  # Filtered view of branches
         self.current_branch: Optional[str] = None
@@ -225,12 +308,25 @@ class GitBranchManager:
         self._init_url_builder()
         
     def _get_config_path(self) -> str:
-        """Get the path to the configuration file."""
+        """Get the path to the configuration file.
+        
+        Uses XDG Base Directory specification for config location.
+        
+        Returns:
+            Full path to config.json file
+        """
         xdg_config_home = os.environ.get('XDG_CONFIG_HOME', os.path.expanduser('~/.config'))
         return os.path.join(xdg_config_home, 'git-branch-manager', 'config.json')
     
     def _load_config(self) -> Dict[str, Any]:
-        """Load configuration from file or return defaults."""
+        """Load configuration from file or return defaults.
+        
+        Attempts to read config.json from the config directory.
+        Returns default configuration if file doesn't exist.
+        
+        Returns:
+            Configuration dictionary with platform settings
+        """
         config_path = self._get_config_path()
         default_config = {
             'platform': 'auto',
@@ -251,7 +347,11 @@ class GitBranchManager:
         return default_config
     
     def _save_config(self) -> None:
-        """Save current configuration to file."""
+        """Save current configuration to file.
+        
+        Creates config directory if needed and writes current
+        configuration to config.json.
+        """
         config_path = self._get_config_path()
         config_dir = os.path.dirname(config_path)
         
@@ -266,7 +366,12 @@ class GitBranchManager:
             print(f"Warning: Could not save config to {config_path}: {e}")
     
     def _init_url_builder(self) -> None:
-        """Initialize the URL builder with the current remote URL."""
+        """Initialize the URL builder with the current remote URL.
+        
+        Attempts to get the origin remote URL and create a
+        GitPlatformURLBuilder instance. Sets url_builder to None
+        if no remote is configured.
+        """
         try:
             result = self._run_command(
                 ["git", "remote", "get-url", "origin"],
@@ -282,11 +387,19 @@ class GitBranchManager:
             self.url_builder = None
         
     def has_active_filters(self) -> bool:
-        """Check if any filters are currently active."""
+        """Check if any filters are currently active.
+        
+        Returns:
+            True if any filter (search, author, age, prefix, or merged) is active
+        """
         return bool(self.search_filter or self.author_filter or self.age_filter or self.prefix_filter or self.merged_filter)
     
     def clear_all_filters(self) -> None:
-        """Clear all active filters."""
+        """Clear all active filters and reset the branch view.
+        
+        Resets search, author, age, prefix, and merged filters,
+        then reapplies filtering to show all branches.
+        """
         self.search_filter = ""
         self.author_filter = False
         self.age_filter = False
@@ -296,13 +409,31 @@ class GitBranchManager:
         self.selected_index = 0
         
     def _run_command(self, cmd: List[str], **kwargs) -> subprocess.CompletedProcess:
-        """Run a command in the current working directory."""
+        """Run a command in the current working directory.
+        
+        Wrapper around subprocess.run that ensures commands are executed
+        in the correct working directory.
+        
+        Args:
+            cmd: Command and arguments as a list
+            **kwargs: Additional arguments passed to subprocess.run
+            
+        Returns:
+            CompletedProcess instance with command results
+        """
         if 'cwd' not in kwargs:
             kwargs['cwd'] = self.working_dir
         return subprocess.run(cmd, **kwargs)
         
     def _get_current_user(self) -> Optional[str]:
-        """Get the current git user."""
+        """Get the current git user email.
+        
+        Used for the author filter to show only branches created by
+        the current user.
+        
+        Returns:
+            User email address from git config, or None if not configured
+        """
         try:
             result = self._run_command(
                 ["git", "config", "user.email"],
@@ -420,7 +551,13 @@ class GitBranchManager:
             return {}
     
     def _check_uncommitted_changes_batch(self) -> bool:
-        """Check if current branch has uncommitted changes."""
+        """Check if current branch has uncommitted changes.
+        
+        Uses git status --porcelain for a machine-readable output format.
+        
+        Returns:
+            True if there are uncommitted changes, False otherwise
+        """
         try:
             status_result = self._run_command(
                 ["git", "status", "--porcelain"],
@@ -433,7 +570,14 @@ class GitBranchManager:
             return False
     
     def _get_remote_branches_set(self) -> set:
-        """Get a set of all branch names that exist on any remote."""
+        """Get a set of all branch names that exist on any remote.
+        
+        Used to determine which local branches have been pushed (have upstream).
+        Strips remote prefixes to get just branch names.
+        
+        Returns:
+            Set of branch names (without remote prefix) that exist on remotes
+        """
         remote_branches = set()
         try:
             result = self._run_command(
@@ -461,7 +605,16 @@ class GitBranchManager:
     
     def _get_branch_stashes(self, branch_name: str) -> List[Tuple[str, str]]:
         """Get stashes that were created by git-branch-manager from the specified branch.
-        Returns list of (stash_ref, stash_message) tuples."""
+        
+        Only returns stashes with the message "Stashed by git-branch-manager"
+        to avoid interfering with user-created stashes.
+        
+        Args:
+            branch_name: Name of the branch to find stashes for
+            
+        Returns:
+            List of tuples containing (stash_ref, stash_message) for matching stashes
+        """
         stashes = []
         try:
             # Get all stashes with their branch info
@@ -487,7 +640,17 @@ class GitBranchManager:
         return stashes
     
     def _get_merged_branches_set(self, base_branch: str) -> set:
-        """Get a set of all branch names that have been merged into the base branch."""
+        """Get a set of all branch names that have been merged into the base branch.
+        
+        Uses git branch --merged to find branches whose tips are reachable
+        from the specified base branch.
+        
+        Args:
+            base_branch: Branch to check merge status against (typically main/master)
+            
+        Returns:
+            Set of branch names that have been merged into base_branch
+        """
         merged_branches = set()
         try:
             # Get branches merged into the base branch
@@ -512,7 +675,21 @@ class GitBranchManager:
         return merged_branches
     
     def safe_addstr(self, stdscr, y: int, x: int, text: str, attr: int = 0) -> int:
-        """Safely add string to screen, truncating if necessary. Returns new x position."""
+        """Safely add string to screen, truncating if necessary.
+        
+        Prevents curses errors when trying to write beyond screen boundaries.
+        Truncates text to fit within available space.
+        
+        Args:
+            stdscr: Curses screen object
+            y: Y coordinate (row)
+            x: X coordinate (column)
+            text: Text to display
+            attr: Optional curses attribute (color pair, bold, etc.)
+            
+        Returns:
+            New x position after adding the text
+        """
         height, width = stdscr.getmaxyx()
         if y >= height or x >= width:
             return x
@@ -538,7 +715,15 @@ class GitBranchManager:
         return x + len(text)
     
     def show_loading_message(self, stdscr, message: str) -> None:
-        """Show a loading message in the center of the screen."""
+        """Show a loading message in the center of the screen.
+        
+        Clears the screen and displays a centered message, typically
+        used during long-running operations.
+        
+        Args:
+            stdscr: Curses screen object
+            message: Loading message to display
+        """
         if stdscr:
             stdscr.clear()
             height, width = stdscr.getmaxyx()
@@ -552,7 +737,16 @@ class GitBranchManager:
                     pass
     
     def get_branches(self, stdscr=None) -> None:
-        """Get list of git branches with commit info - optimized version."""
+        """Get list of git branches with commit info - optimized version.
+        
+        Main method for populating the branch list. Collects local and
+        optionally remote branches, fetches metadata in batch for performance,
+        detects uncommitted changes, upstream status, merge status, and
+        worktree status.
+        
+        Args:
+            stdscr: Optional curses screen object for displaying loading message
+        """
         try:
             if stdscr:
                 self.show_loading_message(stdscr, "Loading branches...")
@@ -690,7 +884,17 @@ class GitBranchManager:
             sys.exit(1)
             
     def _apply_filters(self) -> None:
-        """Apply all active filters to the branch list."""
+        """Apply all active filters to the branch list.
+        
+        Filters are applied in sequence:
+        1. Search filter (name substring match)
+        2. Author filter (current user's branches only)
+        3. Age filter (hide branches older than 3 months)
+        4. Prefix filter (branches starting with specified prefix)
+        5. Merged filter (hide branches merged into main/master)
+        
+        Updates self.filtered_branches with the filtered results.
+        """
         self.filtered_branches = self.branches[:]
         
         # Search filter (name substring)
@@ -734,7 +938,15 @@ class GitBranchManager:
             self.selected_index = max(0, len(self.filtered_branches) - 1)
             
     def stash_changes(self) -> bool:
-        """Stash current changes if any exist."""
+        """Stash current changes if any exist.
+        
+        Creates a stash with the message "Stashed by git-branch-manager"
+        and tracks the stash reference for later recovery.
+        
+        Returns:
+            True if changes were stashed successfully, False if no changes
+            to stash or if stashing failed
+        """
         try:
             # Check if there are any changes to stash
             status_result = self._run_command(
@@ -771,7 +983,18 @@ class GitBranchManager:
             return False
             
     def checkout_branch(self, branch: str, is_remote: bool = False) -> bool:
-        """Checkout the specified branch."""
+        """Checkout the specified branch.
+        
+        For remote branches, creates a local tracking branch if it doesn't
+        already exist. For local branches, performs a standard checkout.
+        
+        Args:
+            branch: Name of the branch to checkout
+            is_remote: Whether this is a remote branch (e.g., origin/feature)
+            
+        Returns:
+            True if checkout succeeded, False on error
+        """
         try:
             if is_remote and '/' in branch:
                 # For remote branches, create a local tracking branch
@@ -814,7 +1037,17 @@ class GitBranchManager:
             return False
             
     def delete_branch(self, branch: str) -> bool:
-        """Delete the specified branch."""
+        """Delete the specified branch.
+        
+        Attempts a safe delete first (git branch -d), then falls back
+        to force delete (git branch -D) if the branch has unmerged changes.
+        
+        Args:
+            branch: Name of the branch to delete
+            
+        Returns:
+            True if deletion succeeded, False if both attempts failed
+        """
         try:
             self._run_command(
                 ["git", "branch", "-d", branch],
@@ -837,7 +1070,18 @@ class GitBranchManager:
                 return False
                 
     def move_branch(self, old_name: str, new_name: str) -> bool:
-        """Move/rename a branch."""
+        """Move/rename a branch.
+        
+        Uses git branch -m to rename a branch. Works for both local
+        and the current branch.
+        
+        Args:
+            old_name: Current name of the branch
+            new_name: New name for the branch
+            
+        Returns:
+            True if rename succeeded, False on error
+        """
         try:
             self._run_command(
                 ["git", "branch", "-m", old_name, new_name],
@@ -922,7 +1166,14 @@ class GitBranchManager:
                 cursor_pos += 1
     
     def show_help(self, stdscr) -> None:
-        """Show help screen with all commands."""
+        """Show help screen with all commands.
+        
+        Displays a scrollable help screen listing all keyboard shortcuts,
+        visual indicators, and features. Supports scrolling with arrow keys.
+        
+        Args:
+            stdscr: Curses screen object
+        """
         height, width = stdscr.getmaxyx()
         
         help_text = [
@@ -1027,7 +1278,15 @@ class GitBranchManager:
                 break
     
     def show_platform_config_help(self, stdscr) -> None:
-        """Show help for configuring Git platform integration."""
+        """Show help for configuring Git platform integration.
+        
+        Displays detailed instructions for setting up browser integration
+        with various Git hosting platforms. Includes example configurations
+        and URL patterns. Supports scrolling.
+        
+        Args:
+            stdscr: Curses screen object
+        """
         height, width = stdscr.getmaxyx()
         
         config_path = self._get_config_path()
@@ -1140,7 +1399,18 @@ class GitBranchManager:
                 break
     
     def show_confirmation_dialog(self, stdscr, message: str) -> Optional[str]:
-        """Show a confirmation dialog with yes/no/cancel options."""
+        """Show a confirmation dialog with yes/no/cancel options.
+        
+        Creates a centered dialog box with the provided message and
+        waits for user input (y/n/ESC).
+        
+        Args:
+            stdscr: Curses screen object
+            message: Confirmation message to display (supports newlines)
+            
+        Returns:
+            'yes' if Y pressed, 'no' if N pressed, 'cancel' if ESC pressed
+        """
         height, width = stdscr.getmaxyx()
         
         # Calculate dialog dimensions
@@ -1182,7 +1452,14 @@ class GitBranchManager:
                 return 'cancel'
     
     def run(self, stdscr) -> None:
-        """Main curses UI loop."""
+        """Main curses UI loop.
+        
+        Initializes the terminal UI, sets up colors, fetches branches,
+        and handles all keyboard input. Runs until user quits.
+        
+        Args:
+            stdscr: Curses screen object (provided by curses.wrapper)
+        """
         # Initialize curses
         curses.curs_set(0)  # Hide cursor
         stdscr.nodelay(False)  # Wait for key press
@@ -1888,6 +2165,13 @@ class GitBranchManager:
                         stdscr.getch()
 
 def main():
+    """Entry point for the Git Branch Manager application.
+    
+    Verifies that the current directory is a git repository,
+    then launches the TUI using curses.
+    
+    Exits with status 1 if not in a git repository.
+    """
     # Check if we're in a git repository
     try:
         subprocess.run(
