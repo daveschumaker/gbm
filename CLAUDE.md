@@ -11,34 +11,38 @@ Git Branch Manager is a terminal-based (TUI) Git branch management tool written 
 ### Core Functionality
 - **Interactive TUI**: Navigate branches with arrow keys
 - **Branch Operations**: Checkout, delete, rename branches
-- **Visual Indicators**: Current branch (*), remote branches (↓), modified files, PR status, merge status
+- **Visual Indicators**: Current branch (*), remote branches (↓), modified files
 - **Stash Management**: Automatic prompt to stash changes when switching branches
 - **Remote Branch Support**: Toggle viewing and checkout remote branches
+- **Performance Optimized**: Uses batch operations for fast loading in large repos
 
 ### Advanced Features
-- **PR Detection**: Shows open pull requests (GitHub only via `gh` CLI)
-- **Merge Status**: Indicates if branches are merged into main/master
-- **Color Coding**: Age-based coloring, status indicators
+- **Branch Filtering**: Search by name, author, age, or prefix
+- **Smart Sorting**: Branches sorted by most recent commits first
+- **Color Coding**: Age-based coloring for quick visual scanning
 - **Help System**: Built-in help screen (?)
-- **Reload/Refresh**: Update branch list and status
+- **Reload/Refresh**: Update branch list
+- **Safe Display**: Handles long branch names and narrow terminals
 
 ## Architecture
 
 ### Main Components
 
 1. **BranchInfo (NamedTuple)**
-   - Stores all branch metadata
-   - Includes: name, commit info, status flags, remote info
+   - Stores branch metadata: name, commit info, uncommitted changes flag, remote info
    - Has method for formatting relative dates
+   - No longer includes merge/PR status (removed for performance)
 
 2. **GitBranchManager Class**
    - Core application logic
-   - Manages branch list, UI state, and operations
-   - Handles git commands via subprocess
+   - Manages branch list, UI state, filtering, and operations
+   - Handles git commands via subprocess with working directory support
 
 ### Key Methods
-- `get_branches()`: Fetches local and remote branches
-- `get_branch_info()`: Gets detailed info for a single branch
+- `get_branches()`: Fetches branches using optimized batch operations
+- `_get_batch_branch_info()`: Uses git for-each-ref for performance
+- `safe_addstr()`: Prevents terminal width overflow errors
+- `has_active_filters()` / `clear_all_filters()`: Filter management
 - `checkout_branch()`: Handles local and remote checkouts
 - `delete_branch()`: Safe branch deletion with force fallback
 - `move_branch()`: Rename/move branches
@@ -48,6 +52,7 @@ Git Branch Manager is a terminal-based (TUI) Git branch management tool written 
 ## Git Integration
 
 ### Commands Used
+- `git for-each-ref`: Batch fetch branch info (performance optimization)
 - `git branch`: List local branches
 - `git branch -r`: List remote branches
 - `git branch -d/-D`: Delete branches
@@ -55,16 +60,13 @@ Git Branch Manager is a terminal-based (TUI) Git branch management tool written 
 - `git checkout`: Switch branches
 - `git checkout -b`: Create tracking branch from remote
 - `git fetch --all`: Fetch all remotes
-- `git cherry`: Check if branch is merged
-- `git log`: Get commit info
 - `git status --porcelain`: Check for uncommitted changes
 - `git stash`: Stash changes
-- `gh pr list`: Get PR info (GitHub only)
 
 ### Platform Support
 - Works in regular Git repositories and worktrees
-- GitHub: Full support including PR detection
-- Bitbucket/GitLab: All features except PR detection
+- Works when run via symlink from any directory
+- All Git platforms supported (GitHub, GitLab, Bitbucket, etc.)
 
 ## UI/UX Design
 
@@ -76,19 +78,26 @@ Git Branch Manager is a terminal-based (TUI) Git branch management tool written 
 - `t`: Toggle remote branches
 - `f`: Fetch from remote
 - `r`: Reload branch list
+- `/`: Search branches by name
+- `a`: Toggle author filter (show only your branches)
+- `o`: Toggle old branches filter (hide >3 months)
+- `p`: Filter by prefix (feature/, bugfix/, etc)
+- `c`: Clear all filters
 - `?`: Show help
-- `q/ESC`: Quit
+- `q`: Quit
+- `ESC`: Clear filters if active, otherwise quit
 
 ### Visual Elements
 - **Prefixes**: `*` (current), `↓` (remote), `  ` (local)
-- **Status Tags**: `[modified]`, `[PR#123]`, `[merged]`
+- **Status Tags**: `[modified]` for uncommitted changes
 - **Colors**: 
   - Green: Current branch
-  - Cyan: Branch names, PR status
+  - Cyan: Branch names
   - Yellow: Modified indicator
-  - Magenta: Recent branches (<1 week), merged status
+  - Magenta: Recent branches (<1 week)
   - Blue: Commit hashes
   - Red: Old branches (>1 month)
+- **Sorting**: All branches sorted by most recent commit first
 
 ## Development Guidelines
 
@@ -119,19 +128,22 @@ Git Branch Manager is a terminal-based (TUI) Git branch management tool written 
 3. Add visual indicator in display logic
 4. Update help text
 
+## Performance Optimizations
+- Uses `git for-each-ref` for batch operations instead of individual `git log` calls
+- Removed expensive merge/PR checking for faster loading
+- Efficient branch sorting by commit date
+- Loading indicator for better UX during operations
+
 ## Known Limitations
-- PR detection only works with GitHub (requires `gh` CLI)
 - Remote branch operations require network access
-- Some git operations may be slow on large repos
-- Terminal size affects display quality
+- Very long branch names may be truncated in narrow terminals
 
 ## Future Enhancement Ideas
-- Search/filter branches
 - Multiple selection for bulk operations
 - Branch graph visualization
-- Integration with more Git platforms
-- Config file for preferences
+- Config file for preferences (e.g., to re-enable merge/PR checks)
 - Undo functionality
+- Export branch list
 
 ## Debugging Tips
 - Check git command outputs with capture_output
@@ -143,7 +155,6 @@ Git Branch Manager is a terminal-based (TUI) Git branch management tool written 
 - Python 3.x
 - curses (built-in)
 - git (command-line)
-- gh CLI (optional, for GitHub PR detection)
 
 ## Files
 - `git-branch-manager.py`: Main application file
@@ -155,11 +166,18 @@ Git Branch Manager is a terminal-based (TUI) Git branch management tool written 
 # Run the application
 python3 git-branch-manager.py
 
-# Common git commands the app uses
-git branch                  # List local branches
-git branch -r              # List remote branches
-git fetch --all            # Fetch all remotes
-git checkout <branch>      # Switch branch
-git branch -d <branch>     # Delete branch
-git branch -m <old> <new>  # Rename branch
+# Install as command (example)
+ln -s /path/to/git-branch-manager.py ~/my-scripts/git-bm
+chmod +x ~/my-scripts/git-bm
+
+# Key git commands the app uses
+git for-each-ref --format="..."    # Batch fetch branch info
+git branch                          # List local branches
+git branch -r                       # List remote branches
+git fetch --all                     # Fetch all remotes
+git checkout <branch>               # Switch branch
+git branch -d <branch>              # Delete branch
+git branch -m <old> <new>           # Rename branch
+git status --porcelain              # Check for uncommitted changes
+git stash push -m "message"         # Stash changes
 ```

@@ -62,6 +62,19 @@ class GitBranchManager:
         self.prefix_filter: str = ""  # Filter by prefix
         self.current_user: Optional[str] = self._get_current_user()
         
+    def has_active_filters(self) -> bool:
+        """Check if any filters are currently active."""
+        return bool(self.search_filter or self.author_filter or self.age_filter or self.prefix_filter)
+    
+    def clear_all_filters(self) -> None:
+        """Clear all active filters."""
+        self.search_filter = ""
+        self.author_filter = False
+        self.age_filter = False
+        self.prefix_filter = ""
+        self._apply_filters()
+        self.selected_index = 0
+        
     def _run_command(self, cmd: List[str], **kwargs) -> subprocess.CompletedProcess:
         """Run a command in the current working directory."""
         if 'cwd' not in kwargs:
@@ -567,7 +580,8 @@ class GitBranchManager:
             ("", 0),
             ("Navigation:", curses.A_BOLD),
             ("  ↑/↓        Navigate through branches", 0),
-            ("  q/ESC      Quit", 0),
+            ("  q          Quit", 0),
+            ("  ESC        Clear filters (or quit if no filters)", 0),
             ("  ?          Show this help", 0),
             ("", 0),
             ("Branch Operations:", curses.A_BOLD),
@@ -809,8 +823,14 @@ class GitBranchManager:
             # Handle key press
             key = stdscr.getch()
             
-            if key == ord('q') or key == ord('Q') or key == 27:  # 27 is ESC
+            if key == ord('q') or key == ord('Q'):
                 break
+            elif key == 27:  # ESC key
+                # If filters are active, clear them instead of quitting
+                if self.has_active_filters():
+                    self.clear_all_filters()
+                else:
+                    break
             elif key == ord('?'):  # Show help
                 self.show_help(stdscr)
             elif key == ord('t') or key == ord('T'):  # Toggle remote branches
@@ -879,12 +899,7 @@ class GitBranchManager:
                     self._apply_filters()
                     self.selected_index = 0  # Reset to first result
             elif key == ord('c') or key == ord('C'):  # Clear filters
-                self.search_filter = ""
-                self.author_filter = False
-                self.age_filter = False
-                self.prefix_filter = ""
-                self._apply_filters()
-                self.selected_index = 0
+                self.clear_all_filters()
             elif key == curses.KEY_UP:
                 self.selected_index = max(0, self.selected_index - 1)
             elif key == curses.KEY_DOWN:
