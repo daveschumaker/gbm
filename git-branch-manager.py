@@ -1508,9 +1508,10 @@ class GitBranchManager:
                             self.show_platform_config_help(stdscr)
                     continue
                 
-                selected_branch = self.filtered_branches[self.selected_index].name
-                # For remote branches, use the local branch name
-                if '/' in selected_branch:
+                selected_branch_info = self.filtered_branches[self.selected_index]
+                selected_branch = selected_branch_info.name
+                # For remote branches, strip the remote prefix (e.g., origin/)
+                if selected_branch_info.is_remote and '/' in selected_branch:
                     branch_name = selected_branch.split('/', 1)[1]
                 else:
                     branch_name = selected_branch
@@ -1552,9 +1553,10 @@ class GitBranchManager:
                             self.show_platform_config_help(stdscr)
                     continue
                 
-                selected_branch = self.filtered_branches[self.selected_index].name
-                # For remote branches, use the local branch name
-                if '/' in selected_branch:
+                selected_branch_info = self.filtered_branches[self.selected_index]
+                selected_branch = selected_branch_info.name
+                # For remote branches, strip the remote prefix (e.g., origin/)
+                if selected_branch_info.is_remote and '/' in selected_branch:
                     branch_name = selected_branch.split('/', 1)[1]
                 else:
                     branch_name = selected_branch
