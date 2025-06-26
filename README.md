@@ -1,5 +1,9 @@
 # Git Branch Manager
 
+<p align="center">
+  <img src="images/git-branch-manager.webp" alt="Git Branch Manager Logo" width="400">
+</p>
+
 A powerful terminal-based (TUI) Git branch management tool that provides an interactive interface for managing Git branches with rich visual feedback and advanced features.
 
 ![Git Branch Manager](https://img.shields.io/badge/git-branch--manager-blue)
@@ -38,6 +42,12 @@ A powerful terminal-based (TUI) Git branch management tool that provides an inte
 - **Browser Integration**: Open branches in GitHub, GitLab, Bitbucket, etc.
 - **Performance Optimized**: Uses batch operations for fast loading in large repos
 - **Professional UI**: Nano-style footer with command shortcuts
+
+## Screenshot
+
+<p align="center">
+  <img src="images/screenshot.png" alt="Git Branch Manager Screenshot" width="800">
+</p>
 
 ## Installation
 
