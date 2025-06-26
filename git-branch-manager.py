@@ -11,6 +11,7 @@ import json
 import webbrowser
 import urllib.parse
 import re
+import threading
 
 class BranchInfo(NamedTuple):
     name: str
@@ -925,6 +926,73 @@ class GitBranchManager:
             stdscr.attroff(curses.color_pair(9))
         except curses.error:
             pass
+    
+    def _run_command_with_spinner(self, stdscr, command: List[str], message: str, **kwargs) -> subprocess.CompletedProcess:
+        """Run a command while showing an animated spinner.
+        
+        Executes a subprocess command in a separate thread while animating
+        a spinner in the main thread. Provides visual feedback during
+        long-running operations.
+        
+        Args:
+            stdscr: Curses screen object
+            command: Command and arguments to execute
+            message: Loading message to display with spinner
+            **kwargs: Additional arguments passed to subprocess.run
+            
+        Returns:
+            CompletedProcess instance with command results
+        """
+        # Shared state between threads
+        result = [None]  # Use list to allow modification in thread
+        exception = [None]
+        stop_spinner = threading.Event()
+        
+        def run_command():
+            """Run the command in a separate thread."""
+            try:
+                result[0] = self._run_command(command, **kwargs)
+            except Exception as e:
+                exception[0] = e
+            finally:
+                stop_spinner.set()
+        
+        # Start command in background thread
+        cmd_thread = threading.Thread(target=run_command)
+        cmd_thread.start()
+        
+        # Animate spinner in main thread
+        spinner_frame = 0
+        stdscr.nodelay(True)  # Make getch non-blocking during animation
+        
+        try:
+            while not stop_spinner.is_set():
+                self.show_loading_message(stdscr, message, spinner_frame)
+                spinner_frame += 1
+                
+                # Check for ESC key to cancel
+                key = stdscr.getch()
+                if key == 27:  # ESC key
+                    # Note: We can't easily cancel the git operation
+                    # but we can stop showing the spinner
+                    break
+                
+                time.sleep(0.1)  # Update spinner every 100ms
+                
+                # Check if thread is still alive
+                if not cmd_thread.is_alive():
+                    break
+        finally:
+            stdscr.nodelay(False)  # Restore blocking mode
+        
+        # Ensure thread completes
+        cmd_thread.join(timeout=1.0)
+        
+        # Handle any exceptions from the thread
+        if exception[0]:
+            raise exception[0]
+        
+        return result[0]
     
     def show_loading_message(self, stdscr, message: str, spinner_frame: int = 0) -> None:
         """Show a loading message in the center of the screen with spinner.
@@ -1898,12 +1966,12 @@ class GitBranchManager:
             elif key == ord('t') or key == ord('T'):  # Toggle remote branches
                 # Fetch from remote before toggling
                 if not self.show_remotes:  # Only fetch when turning remotes ON
-                    # Show centered loading message
-                    self.show_loading_message(stdscr, "Fetching from remote...")
-                    
                     try:
-                        self._run_command(
+                        # Use animated spinner for fetch
+                        self._run_command_with_spinner(
+                            stdscr,
                             ["git", "fetch", "--all"],
+                            "Fetching from remote...",
                             capture_output=True,
                             text=True,
                             check=True
@@ -1924,12 +1992,12 @@ class GitBranchManager:
                 if self.selected_index >= len(self.filtered_branches):
                     self.selected_index = max(0, len(self.filtered_branches) - 1)
             elif key == ord('f') or key == ord('F'):  # Fetch from remote
-                # Show centered loading message
-                self.show_loading_message(stdscr, "Fetching from remote...")
-                
                 try:
-                    result = self._run_command(
+                    # Use animated spinner for fetch
+                    result = self._run_command_with_spinner(
+                        stdscr,
                         ["git", "fetch", "--all"],
+                        "Fetching from remote...",
                         capture_output=True,
                         text=True,
                         check=True
