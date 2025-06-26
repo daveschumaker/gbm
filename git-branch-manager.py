@@ -573,7 +573,7 @@ class GitBranchManager:
             return {}
         
         # Build format string for git for-each-ref
-        format_str = "%(refname:short)|%(objectname:short)|%(committerdate:unix)|%(subject)|%(committeremail)"
+        format_str = "%(refname:short)|%(objectname:short)|%(committerdate:unix)|%(subject)|%(authoremail)"
         
         # Get info for all branches at once
         branch_names = [b[0] for b in branches]
@@ -613,11 +613,16 @@ class GitBranchManager:
                         else:
                             branch_name = ref_name
                         
+                        # Strip angle brackets from email if present
+                        author_email = parts[4]
+                        if author_email.startswith('<') and author_email.endswith('>'):
+                            author_email = author_email[1:-1]
+                        
                         branch_data[branch_name] = {
                             'hash': parts[1],
                             'timestamp': int(parts[2]),
                             'message': parts[3],
-                            'author': parts[4]
+                            'author': author_email
                         }
             
             return branch_data
