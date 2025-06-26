@@ -2434,13 +2434,16 @@ class GitBranchManager:
                     stdscr.addstr(2, 0, "This branch has likely been deleted from the remote repository")
                     stdscr.addstr(3, 0, "after being merged (based on your configuration).")
                     stdscr.addstr(4, 0, "")
-                    stdscr.addstr(5, 0, "To change this behavior, set 'prevent_browser_for_merged' to false")
-                    stdscr.addstr(6, 0, "in your ~/.config/git-branch-manager/config.json file.")
-                    stdscr.addstr(7, 0, "")
-                    stdscr.addstr(8, 0, "Press any key to continue...")
+                    stdscr.addstr(5, 0, "Press 'o' to open anyway, or any other key to cancel...")
+                    stdscr.addstr(6, 0, "")
+                    stdscr.addstr(7, 0, "To disable this warning, set 'prevent_browser_for_merged' to false")
+                    stdscr.addstr(8, 0, "in your ~/.config/git-branch-manager/config.json file.")
                     stdscr.refresh()
-                    stdscr.getch()
-                    continue
+                    
+                    key = stdscr.getch()
+                    if key != ord('o') and key != ord('O'):
+                        continue
+                    # If 'o' pressed, fall through to open the browser
                 
                 # For remote branches, strip the remote prefix (e.g., origin/)
                 if selected_branch_info.is_remote and '/' in selected_branch:
@@ -2507,13 +2510,16 @@ class GitBranchManager:
                     stdscr.addstr(2, 0, "This branch has likely been deleted from the remote repository")
                     stdscr.addstr(3, 0, "after being merged (based on your configuration).")
                     stdscr.addstr(4, 0, "")
-                    stdscr.addstr(5, 0, "To change this behavior, set 'prevent_browser_for_merged' to false")
-                    stdscr.addstr(6, 0, "in your ~/.config/git-branch-manager/config.json file.")
-                    stdscr.addstr(7, 0, "")
-                    stdscr.addstr(8, 0, "Press any key to continue...")
+                    stdscr.addstr(5, 0, "Press 'o' to open anyway, or any other key to cancel...")
+                    stdscr.addstr(6, 0, "")
+                    stdscr.addstr(7, 0, "To disable this warning, set 'prevent_browser_for_merged' to false")
+                    stdscr.addstr(8, 0, "in your ~/.config/git-branch-manager/config.json file.")
                     stdscr.refresh()
-                    stdscr.getch()
-                    continue
+                    
+                    key = stdscr.getch()
+                    if key != ord('o') and key != ord('O'):
+                        continue
+                    # If 'o' pressed, fall through to open the browser
                 
                 # For remote branches, strip the remote prefix (e.g., origin/)
                 if selected_branch_info.is_remote and '/' in selected_branch:
