@@ -58,8 +58,16 @@ mkdir -p ~/.local/bin
 curl -L https://raw.githubusercontent.com/daveschumaker/git-bm/main/git-branch-manager.py -o ~/.local/bin/git-bm
 chmod +x ~/.local/bin/git-bm
 
+# Add ~/.local/bin to PATH if not already present
+# For bash: echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc && source ~/.bashrc
+# For zsh:  echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc && source ~/.zshrc
+
 # Now you can run from anywhere
 git-bm
+
+# Or as a git alias
+git config --global alias.bm '!git-bm'
+git bm  # Now works as a git subcommand!
 ```
 
 ### Install from Source
