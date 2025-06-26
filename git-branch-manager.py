@@ -884,7 +884,7 @@ class GitBranchManager:
             ("t", "Remote", True),
             ("r", "Refresh", True),
             ("N", "New", True),
-            ("D", "Delete", len(self.filtered_branches) > 0),
+            ("D", "Delete", len(self.filtered_branches) > 0 and not self.show_remotes),
             ("b", "Browser", self.url_builder is not None),
             ("/", "Search", True),
             ("S", "Pop Stash", self.last_stash_ref is not None),
@@ -2068,7 +2068,19 @@ class GitBranchManager:
             elif key == ord('D'):  # Shift+D for delete
                 if not self.filtered_branches:
                     continue
-                selected_branch = self.filtered_branches[self.selected_index].name
+                selected_branch_info = self.filtered_branches[self.selected_index]
+                selected_branch = selected_branch_info.name
+                
+                # Check if trying to delete a remote branch
+                if selected_branch_info.is_remote:
+                    stdscr.clear()
+                    stdscr.addstr(0, 0, "Cannot delete remote branches!")
+                    stdscr.addstr(1, 0, "Remote branches must be deleted from the remote repository.")
+                    stdscr.addstr(2, 0, "To delete a local copy of a remote branch, switch off remote view (press 't').")
+                    stdscr.addstr(3, 0, "Press any key to continue...")
+                    stdscr.refresh()
+                    stdscr.getch()
+                    continue
                 
                 # Check if trying to delete current branch
                 if selected_branch == self.current_branch:
