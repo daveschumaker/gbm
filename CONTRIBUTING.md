@@ -13,7 +13,7 @@ By participating in this project, you agree to abide by our code of conduct: be 
 1. **Check existing issues** first to avoid duplicates
 2. **Use the issue template** if provided
 3. **Include details**:
-   - Git Branch Manager version (`git-bm --version` or check `__version__` in the file)
+   - Git Branch Manager version (`gbm --version` or check `__version__` in the file)
    - Python version (`python3 --version`)
    - Operating system and terminal
    - Steps to reproduce the issue

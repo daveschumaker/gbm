@@ -60,23 +60,23 @@ A powerful terminal-based (TUI) Git branch management tool that provides an inte
 
 ```bash
 # Download and install to /usr/local/bin (requires sudo)
-sudo curl -L https://raw.githubusercontent.com/daveschumaker/git-bm/main/git-branch-manager.py -o /usr/local/bin/git-bm
-sudo chmod +x /usr/local/bin/git-bm
+sudo curl -L https://raw.githubusercontent.com/daveschumaker/gbm/main/git-branch-manager.py -o /usr/local/bin/gbm
+sudo chmod +x /usr/local/bin/gbm
 
 # Or install to ~/.local/bin (no sudo required)
 mkdir -p ~/.local/bin
-curl -L https://raw.githubusercontent.com/daveschumaker/git-bm/main/git-branch-manager.py -o ~/.local/bin/git-bm
-chmod +x ~/.local/bin/git-bm
+curl -L https://raw.githubusercontent.com/daveschumaker/gbm/main/git-branch-manager.py -o ~/.local/bin/gbm
+chmod +x ~/.local/bin/gbm
 
 # Add ~/.local/bin to PATH if not already present
 # For bash: echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc && source ~/.bashrc
 # For zsh:  echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc && source ~/.zshrc
 
 # Now you can run from anywhere
-git-bm
+gbm
 
 # Or as a git alias
-git config --global alias.bm '!git-bm'
+git config --global alias.bm '!gbm'
 git bm  # Now works as a git subcommand!
 ```
 
@@ -84,8 +84,8 @@ git bm  # Now works as a git subcommand!
 
 ```bash
 # Clone the repository
-git clone https://github.com/daveschumaker/git-bm.git
-cd git-bm
+git clone https://github.com/daveschumaker/gbm.git
+cd gbm
 
 # Make executable
 chmod +x git-branch-manager.py
@@ -94,10 +94,10 @@ chmod +x git-branch-manager.py
 ./git-branch-manager.py
 
 # Option 2: Create symlink (recommended)
-ln -s $(pwd)/git-branch-manager.py ~/.local/bin/git-bm
+ln -s $(pwd)/git-branch-manager.py ~/.local/bin/gbm
 
 # Now you can run from anywhere
-git-bm
+gbm
 ```
 
 ### Alternative: Install as Git Alias
@@ -116,16 +116,16 @@ git bm
 
 ```bash
 # Show version
-git-bm --version
-git-bm -v
+gbm --version
+gbm -v
 
 # Show help
-git-bm --help
-git-bm -h
+gbm --help
+gbm -h
 
 # Specify a different git repository directory
-git-bm --directory /path/to/repo
-git-bm -d /path/to/repo
+gbm --directory /path/to/repo
+gbm -d /path/to/repo
 ```
 
 ### Basic Navigation
@@ -240,7 +240,7 @@ The tool automatically detects your Git hosting platform:
 
 ```bash
 # Start branch manager
-git-bm
+gbm
 
 # Press 't' to see remote branches
 # Press '/' to search for a feature
@@ -252,7 +252,7 @@ git-bm
 ### Cleanup Old Branches
 
 ```bash
-git-bm
+gbm
 # Press 'o' to hide old branches
 # Press 'm' to hide merged branches
 # Review remaining branches
@@ -262,7 +262,7 @@ git-bm
 ### Find Your Branches
 
 ```bash
-git-bm
+gbm
 # Press 'a' to show only your branches
 # Navigate and manage your work
 ```

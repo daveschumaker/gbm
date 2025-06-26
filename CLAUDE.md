@@ -246,8 +246,8 @@ python3 git-branch-manager.py --help
 python3 git-branch-manager.py --directory /path/to/repo
 
 # Install as command (example)
-ln -s /path/to/git-branch-manager.py ~/my-scripts/git-bm
-chmod +x ~/my-scripts/git-bm
+ln -s /path/to/git-branch-manager.py ~/my-scripts/gbm
+chmod +x ~/my-scripts/gbm
 
 # Key git commands the app uses
 git for-each-ref --format="..."    # Batch fetch branch info
