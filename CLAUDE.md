@@ -171,6 +171,9 @@ Git Branch Manager is a terminal-based (TUI) Git branch management tool written 
 - Remote branch operations require network access
 - Very long branch names may be truncated in narrow terminals
 
+## Recent Bug Fixes
+- **Author Filter Fix**: Fixed email format mismatch that prevented the author filter from working correctly. The filter now properly strips angle brackets from git for-each-ref output to match git config user.email format.
+
 ## Recent Features Added
 - **Stash Tracking**: The app now tracks the last stash it creates and shows it in the header
 - **Stash Recovery**: Press 'S' to pop the last stash created by the app
@@ -185,6 +188,8 @@ Git Branch Manager is a terminal-based (TUI) Git branch management tool written 
 - **Working Directory Display**: Shows current directory in header with worktree detection
 - **Worktree Branch Support**: Shows branches in worktrees with [worktree] indicator and prevents checkout
 - **Worktree Safety**: Prevents checking out branches that are already checked out in other worktrees
+- **CLI Arguments**: Added --version, --help, and --directory flags for better command-line usage
+- **Robust Config Validation**: Configuration errors now show warnings but don't crash the app
 
 ## Future Enhancement Ideas
 - Multiple selection for bulk operations
@@ -223,13 +228,22 @@ The app supports configuration via `~/.config/git-branch-manager/config.json`:
 
 ## Files
 - `git-branch-manager.py`: Main application file
-- `CLAUDE.md`: This file
+- `VERSION`: Contains the current version number (used by --version flag)
+- `CLAUDE.md`: This file (AI assistant guide)
+- `README.md`: User documentation
+- `CHANGELOG.md`: Version history and changes
+- `CONTRIBUTING.md`: Contribution guidelines
 
 ## Quick Command Reference
 
 ```bash
 # Run the application
 python3 git-branch-manager.py
+
+# Run with command-line options
+python3 git-branch-manager.py --version
+python3 git-branch-manager.py --help
+python3 git-branch-manager.py --directory /path/to/repo
 
 # Install as command (example)
 ln -s /path/to/git-branch-manager.py ~/my-scripts/git-bm
