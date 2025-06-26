@@ -926,24 +926,48 @@ class GitBranchManager:
         except curses.error:
             pass
     
-    def show_loading_message(self, stdscr, message: str) -> None:
-        """Show a loading message in the center of the screen.
+    def show_loading_message(self, stdscr, message: str, spinner_frame: int = 0) -> None:
+        """Show a loading message in the center of the screen with spinner.
         
-        Clears the screen and displays a centered message, typically
-        used during long-running operations.
+        Clears the screen and displays a centered message with an animated
+        spinner, typically used during long-running operations.
         
         Args:
             stdscr: Curses screen object
             message: Loading message to display
+            spinner_frame: Frame number for spinner animation (0-7)
         """
         if stdscr:
             stdscr.clear()
             height, width = stdscr.getmaxyx()
+            
+            # Spinner frames for a smooth animation
+            spinners = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"]
+            spinner = spinners[spinner_frame % len(spinners)]
+            
+            # Combine spinner with message
+            display_text = f"{spinner} {message}"
+            
+            # Center the message
             y = height // 2
-            x = (width - len(message)) // 2
+            x = (width - len(display_text)) // 2
+            
             if x >= 0 and y >= 0:
                 try:
-                    stdscr.addstr(y, x, message)
+                    # Draw the spinner in cyan color
+                    stdscr.attron(curses.color_pair(4))
+                    stdscr.addstr(y, x, spinner)
+                    stdscr.attroff(curses.color_pair(4))
+                    
+                    # Draw the message
+                    stdscr.addstr(y, x + 2, message)
+                    
+                    # Add a subtle hint below
+                    hint = "This may take a moment..."
+                    hint_x = (width - len(hint)) // 2
+                    if hint_x >= 0 and y + 2 < height:
+                        stdscr.addstr(y + 2, hint_x, hint, curses.color_pair(8))
+                    
                     stdscr.refresh()
                 except curses.error:
                     pass
@@ -1874,9 +1898,8 @@ class GitBranchManager:
             elif key == ord('t') or key == ord('T'):  # Toggle remote branches
                 # Fetch from remote before toggling
                 if not self.show_remotes:  # Only fetch when turning remotes ON
-                    stdscr.clear()
-                    stdscr.addstr(0, 0, "Fetching from remote...")
-                    stdscr.refresh()
+                    # Show centered loading message
+                    self.show_loading_message(stdscr, "Fetching from remote...")
                     
                     try:
                         self._run_command(
@@ -1901,9 +1924,8 @@ class GitBranchManager:
                 if self.selected_index >= len(self.filtered_branches):
                     self.selected_index = max(0, len(self.filtered_branches) - 1)
             elif key == ord('f') or key == ord('F'):  # Fetch from remote
-                stdscr.clear()
-                stdscr.addstr(0, 0, "Fetching from remote...")
-                stdscr.refresh()
+                # Show centered loading message
+                self.show_loading_message(stdscr, "Fetching from remote...")
                 
                 try:
                     result = self._run_command(
