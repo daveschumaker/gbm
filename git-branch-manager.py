@@ -1394,6 +1394,8 @@ class GitBranchManager:
             ("", 0),
             ("Navigation:", curses.A_BOLD),
             ("  ↑/↓        Navigate through branches", 0),
+            ("  PgUp/PgDn  Navigate by page", 0),
+            ("  Home/End   Jump to first/last branch", 0),
             ("  q          Quit", 0),
             ("  ESC        Clear filters (or quit if no filters)", 0),
             ("  ?          Show this help", 0),
@@ -1486,6 +1488,14 @@ class GitBranchManager:
                 scroll_offset = max(0, scroll_offset - 1)
             elif key == curses.KEY_DOWN:
                 scroll_offset = min(max_scroll, scroll_offset + 1)
+            elif key == curses.KEY_PPAGE:  # Page Up
+                scroll_offset = max(0, scroll_offset - visible_lines)
+            elif key == curses.KEY_NPAGE:  # Page Down
+                scroll_offset = min(max_scroll, scroll_offset + visible_lines)
+            elif key == curses.KEY_HOME:  # Home
+                scroll_offset = 0
+            elif key == curses.KEY_END:  # End
+                scroll_offset = max_scroll
             else:
                 break
     
@@ -1608,6 +1618,14 @@ class GitBranchManager:
                 scroll_offset = max(0, scroll_offset - 1)
             elif key == curses.KEY_DOWN:
                 scroll_offset = min(max_scroll, scroll_offset + 1)
+            elif key == curses.KEY_PPAGE:  # Page Up
+                scroll_offset = max(0, scroll_offset - visible_lines)
+            elif key == curses.KEY_NPAGE:  # Page Down
+                scroll_offset = min(max_scroll, scroll_offset + visible_lines)
+            elif key == curses.KEY_HOME:  # Home
+                scroll_offset = 0
+            elif key == curses.KEY_END:  # End
+                scroll_offset = max_scroll
             else:
                 break
     
@@ -2034,6 +2052,19 @@ class GitBranchManager:
                 self.selected_index = max(0, self.selected_index - 1)
             elif key == curses.KEY_DOWN:
                 self.selected_index = min(len(self.filtered_branches) - 1, self.selected_index + 1)
+            elif key == curses.KEY_PPAGE:  # Page Up
+                # Move up by the number of visible branches
+                page_size = visible_branches
+                self.selected_index = max(0, self.selected_index - page_size)
+            elif key == curses.KEY_NPAGE:  # Page Down
+                # Move down by the number of visible branches
+                page_size = visible_branches
+                self.selected_index = min(len(self.filtered_branches) - 1, self.selected_index + page_size)
+            elif key == curses.KEY_HOME:  # Home - go to first branch
+                self.selected_index = 0
+            elif key == curses.KEY_END:  # End - go to last branch
+                if self.filtered_branches:
+                    self.selected_index = len(self.filtered_branches) - 1
             elif key == ord('D'):  # Shift+D for delete
                 if not self.filtered_branches:
                     continue
