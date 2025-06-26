@@ -10,6 +10,12 @@ A powerful terminal-based (TUI) Git branch management tool that provides an inte
 ![Python](https://img.shields.io/badge/python-3.6%2B-green)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 
+## Screenshot
+
+<p align="center">
+  <img src="images/screenshot.png" alt="Git Branch Manager Screenshot" width="800">
+</p>
+
 ## Features
 
 ### Core Functionality
@@ -42,12 +48,6 @@ A powerful terminal-based (TUI) Git branch management tool that provides an inte
 - **Browser Integration**: Open branches in GitHub, GitLab, Bitbucket, etc.
 - **Performance Optimized**: Uses batch operations for fast loading in large repos
 - **Professional UI**: Nano-style footer with command shortcuts
-
-## Screenshot
-
-<p align="center">
-  <img src="images/screenshot.png" alt="Git Branch Manager Screenshot" width="800">
-</p>
 
 ## Installation
 
