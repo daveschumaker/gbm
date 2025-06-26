@@ -28,6 +28,8 @@ class BranchInfo(NamedTuple):
     has_upstream: bool  # True if branch exists on remote
     is_merged: bool  # True if branch has been merged into main/master
     in_worktree: bool  # True if branch is checked out in a worktree
+    commits_ahead: int  # Number of commits ahead of main/master
+    commits_behind: int  # Number of commits behind main/master
     
     def format_relative_date(self) -> str:
         """Format the commit date as a relative time string."""
@@ -677,6 +679,40 @@ class GitBranchManager:
         
         return merged_branches
     
+    def _get_branch_commit_counts(self, branch_name: str, base_branch: str) -> Tuple[int, int]:
+        """Get the number of commits a branch is ahead/behind relative to base branch.
+        
+        Uses git rev-list to efficiently count commits without fetching full content.
+        
+        Args:
+            branch_name: The branch to compare
+            base_branch: The base branch to compare against (typically main/master)
+            
+        Returns:
+            Tuple of (commits_ahead, commits_behind)
+        """
+        if branch_name == base_branch:
+            return (0, 0)
+        
+        try:
+            result = self._run_command(
+                ["git", "rev-list", "--left-right", "--count", f"{base_branch}...{branch_name}"],
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            
+            # Output format is "behind\tahead"
+            parts = result.stdout.strip().split('\t')
+            if len(parts) == 2:
+                behind = int(parts[0])
+                ahead = int(parts[1])
+                return (ahead, behind)
+        except (subprocess.CalledProcessError, ValueError):
+            pass
+        
+        return (0, 0)
+    
     def safe_addstr(self, stdscr, y: int, x: int, text: str, attr: int = 0) -> int:
         """Safely add string to screen, truncating if necessary.
         
@@ -1163,6 +1199,12 @@ class GitBranchManager:
                     # Check if branch has been merged
                     is_merged = branch_name in merged_branch_names
                     
+                    # Get commit counts for local branches only (skip remote branches for performance)
+                    commits_ahead = 0
+                    commits_behind = 0
+                    if not is_remote and base_branch:
+                        commits_ahead, commits_behind = self._get_branch_commit_counts(branch_name, base_branch)
+                    
                     branch_info = BranchInfo(
                         name=branch_name,
                         is_current=(branch_name == self.current_branch),
@@ -1175,7 +1217,9 @@ class GitBranchManager:
                         remote_name=remote_name,
                         has_upstream=has_upstream,
                         is_merged=is_merged,
-                        in_worktree=(branch_name in worktree_branches) if worktree_branches else False
+                        in_worktree=(branch_name in worktree_branches) if worktree_branches else False,
+                        commits_ahead=commits_ahead,
+                        commits_behind=commits_behind
                     )
                     self.branches.append(branch_info)
             
@@ -1526,12 +1570,15 @@ class GitBranchManager:
             ("  [unpushed] Local branch not on remote", 0),
             ("  [merged]   Branch merged into main/master", 0),
             ("  [worktree] Branch checked out in worktree", 0),
+            ("  [+N]       N commits ahead of main/master", 0),
+            ("  [-N]       N commits behind main/master", 0),
+            ("  [+N/-M]    N ahead and M behind main/master", 0),
             ("", 0),
             ("Color Coding:", curses.A_BOLD),
-            ("  Green      Current branch", 0),
+            ("  Green      Current branch, [+N] ahead only", 0),
             ("  Cyan       Branch names", 0),
-            ("  Yellow     Modified indicator", 0),
-            ("  Magenta    Recent commits (<1 week)", 0),
+            ("  Yellow     Modified indicator, [-N] behind only", 0),
+            ("  Magenta    Recent commits (<1 week), [+N/-M] mixed", 0),
             ("  Blue       Commit hashes", 0),
             ("  Red        Old branches (>1 month)", 0),
             ("", 0),
@@ -1860,9 +1907,18 @@ class GitBranchManager:
                 worktree_indicator = ""
                 if branch_info.in_worktree and not branch_info.is_current:
                     worktree_indicator = " [worktree]"
+                # Add commit count indicators
+                commit_count_indicator = ""
+                if not branch_info.is_remote:
+                    if branch_info.commits_ahead > 0 and branch_info.commits_behind > 0:
+                        commit_count_indicator = f" [+{branch_info.commits_ahead}/-{branch_info.commits_behind}]"
+                    elif branch_info.commits_ahead > 0:
+                        commit_count_indicator = f" [+{branch_info.commits_ahead}]"
+                    elif branch_info.commits_behind > 0:
+                        commit_count_indicator = f" [-{branch_info.commits_behind}]"
                 
                 # Calculate available space for commit message
-                fixed_len = len(prefix) + len(branch_info.name) + len(modified_indicator) + len(unpushed_indicator) + len(merged_indicator) + len(worktree_indicator) + len(separator) * 3 + len(relative_date) + len(branch_info.commit_hash)
+                fixed_len = len(prefix) + len(branch_info.name) + len(modified_indicator) + len(unpushed_indicator) + len(merged_indicator) + len(worktree_indicator) + len(commit_count_indicator) + len(separator) * 3 + len(relative_date) + len(branch_info.commit_hash)
                 max_msg_len = width - fixed_len - 1
                 commit_msg = branch_info.commit_message
                 if len(commit_msg) > max_msg_len and max_msg_len > 3:
@@ -1888,6 +1944,8 @@ class GitBranchManager:
                         x_pos = self.safe_addstr(stdscr, y, x_pos, merged_indicator)
                     if worktree_indicator:
                         x_pos = self.safe_addstr(stdscr, y, x_pos, worktree_indicator)
+                    if commit_count_indicator:
+                        x_pos = self.safe_addstr(stdscr, y, x_pos, commit_count_indicator)
                     x_pos = self.safe_addstr(stdscr, y, x_pos, separator)
                     x_pos = self.safe_addstr(stdscr, y, x_pos, relative_date)
                     x_pos = self.safe_addstr(stdscr, y, x_pos, separator)
@@ -1920,6 +1978,18 @@ class GitBranchManager:
                     # Worktree indicator - use cyan color
                     if worktree_indicator:
                         x_pos = self.safe_addstr(stdscr, y, x_pos, worktree_indicator, curses.color_pair(4))
+                    
+                    # Commit count indicator - use different colors for ahead/behind
+                    if commit_count_indicator:
+                        if branch_info.commits_ahead > 0 and branch_info.commits_behind == 0:
+                            # Only ahead - green
+                            x_pos = self.safe_addstr(stdscr, y, x_pos, commit_count_indicator, curses.color_pair(2))
+                        elif branch_info.commits_behind > 0 and branch_info.commits_ahead == 0:
+                            # Only behind - yellow
+                            x_pos = self.safe_addstr(stdscr, y, x_pos, commit_count_indicator, curses.color_pair(3))
+                        else:
+                            # Both ahead and behind - magenta
+                            x_pos = self.safe_addstr(stdscr, y, x_pos, commit_count_indicator, curses.color_pair(5))
                     
                     x_pos = self.safe_addstr(stdscr, y, x_pos, separator)
                     
