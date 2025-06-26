@@ -46,12 +46,28 @@ A powerful terminal-based (TUI) Git branch management tool that provides an inte
 - Git
 - Terminal with color support
 
-### Quick Install
+### Quick Install (curl)
+
+```bash
+# Download and install to /usr/local/bin (requires sudo)
+sudo curl -L https://raw.githubusercontent.com/daveschumaker/git-bm/main/git-branch-manager.py -o /usr/local/bin/git-bm
+sudo chmod +x /usr/local/bin/git-bm
+
+# Or install to ~/.local/bin (no sudo required)
+mkdir -p ~/.local/bin
+curl -L https://raw.githubusercontent.com/daveschumaker/git-bm/main/git-branch-manager.py -o ~/.local/bin/git-bm
+chmod +x ~/.local/bin/git-bm
+
+# Now you can run from anywhere
+git-bm
+```
+
+### Install from Source
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/git-branch-manager.git
-cd git-branch-manager
+git clone https://github.com/daveschumaker/git-bm.git
+cd git-bm
 
 # Make executable
 chmod +x git-branch-manager.py
@@ -59,7 +75,7 @@ chmod +x git-branch-manager.py
 # Option 1: Run directly
 ./git-branch-manager.py
 
-# Option 2: Add to PATH (recommended)
+# Option 2: Create symlink (recommended)
 ln -s $(pwd)/git-branch-manager.py ~/.local/bin/git-bm
 
 # Now you can run from anywhere
