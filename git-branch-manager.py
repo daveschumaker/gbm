@@ -1377,15 +1377,16 @@ class GitBranchManager:
                         all_branches.append((branch_name, True, remote_name))
             
             # Get basic branch info (cached)
-            cache_key = f'branch_info:{",".join([b[0] for b in all_branches])}'
+            # Use different cache keys for local vs remote branches
+            cache_key = f'branch_info:{"remote" if self.show_remotes else "local"}'
             batch_info = None
             if self.cache:
-                batch_info = self.cache.get('branch_info')
+                batch_info = self.cache.get(cache_key)
             
             if not batch_info:
                 batch_info = self._get_batch_branch_info(all_branches, worktree_branches)
                 if self.cache:
-                    self.cache.set('branch_info', batch_info)
+                    self.cache.set(cache_key, batch_info)
             
             # Check uncommitted changes once for current branch
             has_uncommitted = False
@@ -1894,7 +1895,7 @@ class GitBranchManager:
             # Invalidate cache after branch deletion
             if self.cache:
                 self.cache.invalidate('local_branches')
-                self.cache.invalidate('branch_info')
+                self.cache.invalidate_pattern('branch_info')
                 self.cache.invalidate_pattern('commit_counts')
                 self.cache.invalidate_pattern('merged_branches')
             
@@ -1912,7 +1913,7 @@ class GitBranchManager:
                 # Invalidate cache after branch deletion
                 if self.cache:
                     self.cache.invalidate('local_branches')
-                    self.cache.invalidate('branch_info')
+                    self.cache.invalidate_pattern('branch_info')
                     self.cache.invalidate_pattern('commit_counts')
                     self.cache.invalidate_pattern('merged_branches')
                 
@@ -1944,7 +1945,7 @@ class GitBranchManager:
             # Invalidate cache after branch rename
             if self.cache:
                 self.cache.invalidate('local_branches')
-                self.cache.invalidate('branch_info')
+                self.cache.invalidate_pattern('branch_info')
                 self.cache.invalidate_pattern('commit_counts')
                 if old_name == self.current_branch:
                     self.cache.invalidate('current_branch')
@@ -2579,6 +2580,7 @@ class GitBranchManager:
                             self.cache.invalidate('remote_branches')
                             self.cache.invalidate('remote_branches_set')
                             self.cache.invalidate_pattern('merged_branches')
+                            self.cache.invalidate_pattern('branch_info')  # Force re-fetch of branch info
                         
                     except subprocess.CalledProcessError as e:
                         stdscr.clear()
@@ -2589,8 +2591,8 @@ class GitBranchManager:
                         continue
                 
                 self.show_remotes = not self.show_remotes
-                # Reload branches with loading message
-                self.get_branches(stdscr)
+                # Reload branches using progressive loading
+                self.load_branches(stdscr)
                 
                 # Adjust selected index if needed
                 if self.selected_index >= len(self.filtered_branches):
@@ -2614,7 +2616,7 @@ class GitBranchManager:
                         self.cache.invalidate_pattern('merged_branches')
                     
                     # Reload branches immediately after fetch
-                    self.get_branches(stdscr)
+                    self.load_branches(stdscr)
                 except subprocess.CalledProcessError as e:
                     stdscr.clear()
                     stdscr.addstr(0, 0, f"Fetch failed: {e}")
@@ -2622,8 +2624,11 @@ class GitBranchManager:
                     stdscr.refresh()
                     stdscr.getch()
             elif key == ord('r') or key == ord('R'):  # Reload
-                # Just reload branches - the loading message is shown by get_branches
-                self.get_branches(stdscr)
+                # Clear cache to force fresh data
+                if self.cache:
+                    self.cache.invalidate()  # Clear all cache entries
+                # Reload branches using progressive loading
+                self.load_branches(stdscr)
                 
                 # Adjust selected index if needed
                 if self.selected_index >= len(self.filtered_branches):
@@ -2680,7 +2685,7 @@ class GitBranchManager:
                         )
                         self.last_stash_ref = None  # Clear the reference
                         # Reload branches to update modified status
-                        self.get_branches(stdscr)
+                        self.load_branches(stdscr)
                     except subprocess.CalledProcessError as e:
                         stdscr.clear()
                         stdscr.addstr(0, 0, f"Failed to pop stash: {e}")
@@ -2726,7 +2731,7 @@ class GitBranchManager:
                                 text=True,
                                 check=True
                             )
-                            self.get_branches(stdscr)  # Refresh branch list
+                            self.load_branches(stdscr)  # Refresh branch list
                         except subprocess.CalledProcessError as e:
                             stdscr.clear()
                             stdscr.addstr(0, 0, f"Failed to create branch: {e}")
@@ -2742,7 +2747,7 @@ class GitBranchManager:
                                 text=True,
                                 check=True
                             )
-                            self.get_branches(stdscr)  # Refresh branch list
+                            self.load_branches(stdscr)  # Refresh branch list
                         except subprocess.CalledProcessError as e:
                             stdscr.clear()
                             stdscr.addstr(0, 0, f"Failed to create branch: {e}")
@@ -3063,7 +3068,7 @@ class GitBranchManager:
                         
                         # Checkout branch
                         if self.checkout_branch(selected_branch, selected_branch_info.is_remote):
-                            self.get_branches(stdscr)  # Refresh branch list
+                            self.load_branches(stdscr)  # Refresh branch list
                             
                             # Check if the newly checked out branch has any stashes
                             branch_stashes = self._get_branch_stashes(self.current_branch)
