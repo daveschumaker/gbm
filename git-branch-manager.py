@@ -345,7 +345,8 @@ class GitBranchManager:
             'platform': 'auto',
             'default_base_branch': 'main',
             'browser_command': 'open' if sys.platform == 'darwin' else 'xdg-open' if sys.platform.startswith('linux') else 'start',
-            'custom_patterns': {}
+            'custom_patterns': {},
+            'prevent_browser_for_merged': False  # Prevent opening browser for merged branches
         }
         
         if os.path.exists(config_path):
@@ -411,6 +412,13 @@ class GitBranchManager:
                 validated['custom_patterns'] = valid_patterns
             else:
                 warnings.append("Invalid custom_patterns format, using empty dict")
+        
+        # Validate prevent_browser_for_merged
+        if 'prevent_browser_for_merged' in user_config:
+            if isinstance(user_config['prevent_browser_for_merged'], bool):
+                validated['prevent_browser_for_merged'] = user_config['prevent_browser_for_merged']
+            else:
+                warnings.append(f"Invalid prevent_browser_for_merged value, using False")
         
         # Print warnings if any
         if warnings:
@@ -2418,6 +2426,22 @@ class GitBranchManager:
                     stdscr.getch()
                     continue
                 
+                # Check if branch is merged and config prevents opening
+                if selected_branch_info.is_merged and self.config.get('prevent_browser_for_merged', False):
+                    stdscr.clear()
+                    stdscr.addstr(0, 0, f"Branch '{selected_branch}' has been merged!")
+                    stdscr.addstr(1, 0, "")
+                    stdscr.addstr(2, 0, "This branch has likely been deleted from the remote repository")
+                    stdscr.addstr(3, 0, "after being merged (based on your configuration).")
+                    stdscr.addstr(4, 0, "")
+                    stdscr.addstr(5, 0, "To change this behavior, set 'prevent_browser_for_merged' to false")
+                    stdscr.addstr(6, 0, "in your ~/.config/git-branch-manager/config.json file.")
+                    stdscr.addstr(7, 0, "")
+                    stdscr.addstr(8, 0, "Press any key to continue...")
+                    stdscr.refresh()
+                    stdscr.getch()
+                    continue
+                
                 # For remote branches, strip the remote prefix (e.g., origin/)
                 if selected_branch_info.is_remote and '/' in selected_branch:
                     branch_name = selected_branch.split('/', 1)[1]
@@ -2471,6 +2495,22 @@ class GitBranchManager:
                     stdscr.addstr(1, 0, "Push the branch first before opening in browser.")
                     stdscr.addstr(2, 0, "")
                     stdscr.addstr(3, 0, "Press any key to continue...")
+                    stdscr.refresh()
+                    stdscr.getch()
+                    continue
+                
+                # Check if branch is merged and config prevents opening
+                if selected_branch_info.is_merged and self.config.get('prevent_browser_for_merged', False):
+                    stdscr.clear()
+                    stdscr.addstr(0, 0, f"Branch '{selected_branch}' has been merged!")
+                    stdscr.addstr(1, 0, "")
+                    stdscr.addstr(2, 0, "This branch has likely been deleted from the remote repository")
+                    stdscr.addstr(3, 0, "after being merged (based on your configuration).")
+                    stdscr.addstr(4, 0, "")
+                    stdscr.addstr(5, 0, "To change this behavior, set 'prevent_browser_for_merged' to false")
+                    stdscr.addstr(6, 0, "in your ~/.config/git-branch-manager/config.json file.")
+                    stdscr.addstr(7, 0, "")
+                    stdscr.addstr(8, 0, "Press any key to continue...")
                     stdscr.refresh()
                     stdscr.getch()
                     continue

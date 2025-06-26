@@ -102,6 +102,22 @@ git bm
 
 ## Usage
 
+### Command Line Arguments
+
+```bash
+# Show version
+git-bm --version
+git-bm -v
+
+# Show help
+git-bm --help
+git-bm -h
+
+# Specify a different git repository directory
+git-bm --directory /path/to/repo
+git-bm -d /path/to/repo
+```
+
 ### Basic Navigation
 - `↑/↓` or `j/k`: Navigate through branches
 - `Page Up/Page Down`: Navigate by page
@@ -142,6 +158,7 @@ Git Branch Manager supports configuration via `~/.config/git-branch-manager/conf
   "platform": "auto",              // auto-detect or: github, gitlab, bitbucket-cloud, bitbucket-server, custom
   "default_base_branch": "main",   // default branch for comparisons
   "browser_command": "open",       // command to open browser (open on macOS, xdg-open on Linux)
+  "prevent_browser_for_merged": false,  // prevent opening browser for merged branches (useful if remote deletes merged branches)
   "custom_patterns": {             // for custom Git hosting platforms
     "branch": "https://git.example.com/{repo}/tree/{branch}",
     "compare": "https://git.example.com/{repo}/compare/{base}...{branch}"
