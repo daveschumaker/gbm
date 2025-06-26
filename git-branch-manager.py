@@ -714,6 +714,144 @@ class GitBranchManager:
         
         return x + len(text)
     
+    def draw_header(self, stdscr, width: int) -> int:
+        """Draw the header with title, directory, and status information.
+        
+        Creates a clean, organized header with:
+        - Title bar with app name
+        - Directory and repository info
+        - Active filters and status indicators
+        
+        Args:
+            stdscr: Curses screen object
+            width: Terminal width
+            
+        Returns:
+            Y position after header (where content should start)
+        """
+        # Get shortened working directory for display
+        cwd = self.working_dir
+        home = os.path.expanduser('~')
+        if cwd.startswith(home):
+            cwd = '~' + cwd[len(home):]
+        
+        # Check if we're in a worktree
+        worktree_info = ""
+        try:
+            # Check if this is a worktree
+            result = self._run_command(
+                ["git", "rev-parse", "--show-toplevel"],
+                capture_output=True,
+                text=True,
+                check=False
+            )
+            if result.returncode == 0 and result.stdout:
+                git_dir = result.stdout.strip()
+                # Check if it's a worktree by looking for .git file (not directory)
+                git_path = os.path.join(git_dir, '.git')
+                if os.path.isfile(git_path):
+                    worktree_info = " [worktree]"
+        except:
+            pass
+        
+        # Line 0: Title bar with directory
+        title = "Git Branch Manager"
+        title_with_dir = f" {title} • {cwd}{worktree_info}"
+        
+        # Truncate if too long, keeping the title visible
+        max_left_side = width - 25  # Reserve space for version and help
+        if len(title_with_dir) > max_left_side:
+            # Keep title, truncate directory
+            title_part = f" {title} • "
+            available_for_dir = max_left_side - len(title_part) - 3
+            if available_for_dir > 0:
+                truncated_dir = "..." + cwd[-(available_for_dir):]
+                title_with_dir = f"{title_part}{truncated_dir}{worktree_info}"
+            else:
+                title_with_dir = f" {title}"[:max_left_side]
+        
+        # Right-align version and help hint
+        version = "v1.0"
+        right_text = f"{version} • Press ? for help "
+        padding = width - len(title_with_dir) - len(right_text)
+        if padding > 0:
+            title_bar = title_with_dir + " " * padding + right_text
+        else:
+            # If no room, just show the left side
+            title_bar = title_with_dir[:width-1]
+        
+        # Draw title bar with inverted colors
+        try:
+            stdscr.attron(curses.color_pair(9))
+            stdscr.addstr(0, 0, " " * (width - 1))  # Clear line
+            stdscr.addstr(0, 0, title_bar[:width-1])
+            stdscr.attroff(curses.color_pair(9))
+        except curses.error:
+            pass
+        
+        # Line 1: Status indicators (only show if there are any)
+        current_y = 1
+        status_items = []
+        if self.show_remotes:
+            status_items.append("Remotes: ON")
+        if self.last_stash_ref:
+            status_items.append(f"Stash: {self.last_stash_ref}")
+        
+        if status_items:
+            status_line = " • ".join(status_items)
+            if len(status_line) > width - 1:
+                status_line = status_line[:width-4] + "..."
+            
+            try:
+                stdscr.addstr(current_y, 0, status_line[:width-1], curses.color_pair(8))
+            except curses.error:
+                pass
+            current_y += 1
+        
+        # Active filters (if any)
+        filters = []
+        if self.search_filter:
+            filters.append(f"Search: {self.search_filter}")
+        if self.author_filter:
+            filters.append("Author: me")
+        if self.age_filter:
+            filters.append("Age: <3 months")
+        if self.prefix_filter:
+            filters.append(f"Prefix: {self.prefix_filter}")
+        if self.merged_filter:
+            filters.append("Hiding: merged")
+        
+        if filters:
+            filter_line = f"Filters: {' • '.join(filters)}"
+            if len(filter_line) > width - 1:
+                filter_line = filter_line[:width-4] + "..."
+            try:
+                stdscr.addstr(current_y, 0, filter_line[:width-1], curses.color_pair(3))
+            except curses.error:
+                pass
+            current_y += 1
+        
+        # Separator line with branch count
+        separator = "─" * (width - 1)
+        
+        # Add branch count to separator if there's room
+        branch_count_text = f" {len(self.filtered_branches)} branches "
+        if len(self.branches) != len(self.filtered_branches):
+            branch_count_text = f" {len(self.filtered_branches)}/{len(self.branches)} branches "
+        
+        if len(branch_count_text) + 10 < width:
+            # Insert branch count in the middle of separator
+            mid_point = (width - len(branch_count_text)) // 2
+            separator = separator[:mid_point] + branch_count_text + separator[mid_point + len(branch_count_text):]
+        
+        try:
+            stdscr.addstr(current_y, 0, separator[:width-1], curses.color_pair(8))
+        except curses.error:
+            pass
+        
+        # Return the Y position where content should start
+        return current_y + 2  # +1 for separator, +1 for spacing
+    
     def draw_footer(self, stdscr, height: int, width: int) -> None:
         """Draw the fixed footer with command shortcuts.
         
@@ -1556,68 +1694,10 @@ class GitBranchManager:
             stdscr.clear()
             height, width = stdscr.getmaxyx()
             
-            # Get shortened working directory for display
-            cwd = self.working_dir
-            home = os.path.expanduser('~')
-            if cwd.startswith(home):
-                cwd = '~' + cwd[len(home):]
-            
-            # Check if we're in a worktree
-            worktree_info = ""
-            try:
-                # Check if this is a worktree
-                result = self._run_command(
-                    ["git", "rev-parse", "--show-toplevel"],
-                    capture_output=True,
-                    text=True,
-                    check=False
-                )
-                if result.returncode == 0:
-                    git_dir = result.stdout.strip()
-                    # Check if it's a worktree by looking for .git file (not directory)
-                    git_path = os.path.join(git_dir, '.git')
-                    if os.path.isfile(git_path):
-                        worktree_info = " [worktree]"
-            except:
-                pass
-            
-            # Header
-            header = "Git Branch Manager - Press ? for help"
-            if self.show_remotes:
-                header += " [REMOTES ON]"
-            if self.last_stash_ref:
-                header += f" [Stash: {self.last_stash_ref}]"
-            
-            # Add active filter indicators
-            filters = []
-            if self.search_filter:
-                filters.append(f"search:{self.search_filter}")
-            if self.author_filter:
-                filters.append("author:me")
-            if self.age_filter:
-                filters.append("age:<3m")
-            if self.prefix_filter:
-                filters.append(f"prefix:{self.prefix_filter}")
-            if self.merged_filter:
-                filters.append("hide:merged")
-            
-            if filters:
-                header += f" [Filters: {', '.join(filters)}]"
-            
-            # First line: main header
-            stdscr.addstr(0, 0, header[:width-1])
-            
-            # Second line: working directory
-            dir_line = f"Directory: {cwd}{worktree_info}"
-            if len(dir_line) > width - 1:
-                # Truncate from the left if too long, keeping the end visible
-                dir_line = "..." + dir_line[-(width - 4):]
-            stdscr.addstr(1, 0, dir_line[:width-1], curses.color_pair(8))
-            
-            stdscr.addstr(2, 0, "─" * min(max(len(header), len(dir_line)), width-1), curses.color_pair(8))
+            # Draw header and get content start position
+            start_y = self.draw_header(stdscr, width)
             
             # Display branches
-            start_y = 4  # Increased from 3 to account for directory line
             footer_height = 2  # Footer takes 2 lines (separator + commands)
             visible_branches = min(height - start_y - footer_height - 1, len(self.filtered_branches))
             
@@ -1743,6 +1823,17 @@ class GitBranchManager:
                     
                     # Commit message
                     x_pos = self.safe_addstr(stdscr, y, x_pos, commit_msg)
+            
+            # Add scroll indicator if needed
+            if len(self.filtered_branches) > visible_branches:
+                scroll_pos = self.selected_index / max(1, len(self.filtered_branches) - 1)
+                scroll_pct = int(scroll_pos * 100)
+                scroll_msg = f"[{self.selected_index + 1}/{len(self.filtered_branches)}]"
+                try:
+                    # Show in top right corner
+                    stdscr.addstr(0, width - len(scroll_msg) - 1, scroll_msg, curses.color_pair(9))
+                except curses.error:
+                    pass
             
             # Draw footer
             self.draw_footer(stdscr, height, width)
