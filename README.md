@@ -60,23 +60,23 @@ A powerful terminal-based (TUI) Git branch management tool that provides an inte
 
 ```bash
 # Download and install to /usr/local/bin (requires sudo)
-sudo curl -L https://raw.githubusercontent.com/daveschumaker/gbm/main/git-branch-manager.py -o /usr/local/bin/gbm
-sudo chmod +x /usr/local/bin/gbm
+sudo curl -L https://raw.githubusercontent.com/daveschumaker/gbm/main/git-branch-manager.py -o /usr/local/bin/git-bm
+sudo chmod +x /usr/local/bin/git-bm
 
 # Or install to ~/.local/bin (no sudo required)
 mkdir -p ~/.local/bin
-curl -L https://raw.githubusercontent.com/daveschumaker/gbm/main/git-branch-manager.py -o ~/.local/bin/gbm
-chmod +x ~/.local/bin/gbm
+curl -L https://raw.githubusercontent.com/daveschumaker/gbm/main/git-branch-manager.py -o ~/.local/bin/git-bm
+chmod +x ~/.local/bin/git-bm
 
 # Add ~/.local/bin to PATH if not already present
 # For bash: echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc && source ~/.bashrc
 # For zsh:  echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc && source ~/.zshrc
 
 # Now you can run from anywhere
-gbm
+git-bm
 
 # Or as a git alias
-git config --global alias.bm '!gbm'
+git config --global alias.bm '!git-bm'
 git bm  # Now works as a git subcommand!
 ```
 
@@ -94,10 +94,10 @@ chmod +x git-branch-manager.py
 ./git-branch-manager.py
 
 # Option 2: Create symlink (recommended)
-ln -s $(pwd)/git-branch-manager.py ~/.local/bin/gbm
+ln -s $(pwd)/git-branch-manager.py ~/.local/bin/git-bm
 
 # Now you can run from anywhere
-gbm
+git-bm
 ```
 
 ### Alternative: Install as Git Alias
