@@ -1,7 +1,5 @@
 #!/usr/bin/env python3
 
-__version__ = "1.0.0"
-
 import subprocess
 import sys
 import os
@@ -14,6 +12,15 @@ import webbrowser
 import urllib.parse
 import re
 import threading
+import argparse
+from pathlib import Path
+
+# Load version from VERSION file
+_version_file = Path(__file__).parent / 'VERSION'
+if _version_file.exists():
+    __version__ = _version_file.read_text().strip()
+else:
+    __version__ = 'unknown'
 
 class BranchInfo(NamedTuple):
     name: str
@@ -328,6 +335,7 @@ class GitBranchManager:
         
         Attempts to read config.json from the config directory.
         Returns default configuration if file doesn't exist.
+        Validates configuration and falls back to defaults for invalid values.
         
         Returns:
             Configuration dictionary with platform settings
@@ -344,12 +352,74 @@ class GitBranchManager:
             try:
                 with open(config_path, 'r') as f:
                     user_config = json.load(f)
-                    # Merge with defaults
-                    default_config.update(user_config)
+                    # Validate and merge with defaults
+                    validated_config = self._validate_config(user_config, default_config)
+                    return validated_config
             except (json.JSONDecodeError, IOError) as e:
                 print(f"Warning: Could not load config from {config_path}: {e}")
+                print("Using default configuration.")
         
         return default_config
+    
+    def _validate_config(self, user_config: Dict[str, Any], default_config: Dict[str, Any]) -> Dict[str, Any]:
+        """Validate user configuration and merge with defaults.
+        
+        Ensures all configuration values are valid types and within expected ranges.
+        Falls back to default values for any invalid entries.
+        
+        Args:
+            user_config: Configuration loaded from file
+            default_config: Default configuration values
+            
+        Returns:
+            Validated configuration dictionary
+        """
+        validated = default_config.copy()
+        warnings = []
+        
+        # Validate platform
+        if 'platform' in user_config:
+            valid_platforms = ['auto', 'github', 'gitlab', 'bitbucket-cloud', 'bitbucket-server', 'azure-devops', 'custom']
+            if isinstance(user_config['platform'], str) and user_config['platform'] in valid_platforms:
+                validated['platform'] = user_config['platform']
+            else:
+                warnings.append(f"Invalid platform '{user_config['platform']}', using 'auto'")
+        
+        # Validate default_base_branch
+        if 'default_base_branch' in user_config:
+            if isinstance(user_config['default_base_branch'], str) and user_config['default_base_branch'].strip():
+                validated['default_base_branch'] = user_config['default_base_branch']
+            else:
+                warnings.append(f"Invalid default_base_branch, using 'main'")
+        
+        # Validate browser_command
+        if 'browser_command' in user_config:
+            if isinstance(user_config['browser_command'], str) and user_config['browser_command'].strip():
+                validated['browser_command'] = user_config['browser_command']
+            else:
+                warnings.append(f"Invalid browser_command, using system default")
+        
+        # Validate custom_patterns
+        if 'custom_patterns' in user_config:
+            if isinstance(user_config['custom_patterns'], dict):
+                valid_patterns = {}
+                for key, value in user_config['custom_patterns'].items():
+                    if isinstance(key, str) and isinstance(value, str):
+                        valid_patterns[key] = value
+                    else:
+                        warnings.append(f"Invalid custom pattern: {key}")
+                validated['custom_patterns'] = valid_patterns
+            else:
+                warnings.append("Invalid custom_patterns format, using empty dict")
+        
+        # Print warnings if any
+        if warnings:
+            print("\nConfiguration warnings:")
+            for warning in warnings:
+                print(f"  - {warning}")
+            print("")
+        
+        return validated
     
     def _save_config(self) -> None:
         """Save current configuration to file.
@@ -2543,11 +2613,64 @@ class GitBranchManager:
 def main():
     """Entry point for the Git Branch Manager application.
     
-    Verifies that the current directory is a git repository,
-    then launches the TUI using curses.
+    Parses command line arguments, verifies git repository,
+    and launches the TUI using curses.
     
     Exits with status 1 if not in a git repository.
     """
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(
+        prog='git-branch-manager',
+        description='Terminal-based Git branch manager with rich features',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""Key bindings:
+  ↑/↓       Navigate branches
+  Enter     Checkout selected branch
+  D         Delete branch
+  M         Move/rename branch
+  N         Create new branch
+  S         Pop last stash
+  t         Toggle remote branches
+  f         Fetch from remote
+  r         Reload branch list
+  b         Open branch in browser
+  B         Open branch comparison/PR in browser
+  /         Search branches
+  a         Toggle author filter
+  o         Toggle old branches filter
+  m         Toggle merged filter
+  p         Filter by prefix
+  c         Clear all filters
+  ?         Show help
+  q         Quit
+  ESC       Clear filters or quit
+
+For more information, visit: https://github.com/daves/git-branch-manager"""
+    )
+    
+    parser.add_argument(
+        '--version', '-v',
+        action='version',
+        version=f'%(prog)s {__version__}'
+    )
+    
+    parser.add_argument(
+        '--directory', '-d',
+        type=str,
+        help='Git repository directory (default: current directory)',
+        default=os.getcwd()
+    )
+    
+    args = parser.parse_args()
+    
+    # Change to specified directory if provided
+    if args.directory != os.getcwd():
+        try:
+            os.chdir(args.directory)
+        except OSError as e:
+            print(f"Error: Cannot change to directory '{args.directory}': {e}")
+            sys.exit(1)
+    
     # Check if we're in a git repository
     try:
         subprocess.run(
