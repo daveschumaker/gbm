@@ -14,6 +14,8 @@ import re
 import threading
 import argparse
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from queue import Queue
 
 # Load version from VERSION file
 _version_file = Path(__file__).parent / 'VERSION'
@@ -21,6 +23,106 @@ if _version_file.exists():
     __version__ = _version_file.read_text().strip()
 else:
     __version__ = 'unknown'
+
+# Default cache TTL values (in seconds)
+DEFAULT_CACHE_TTL = {
+    'current_branch': 5,        # 5 seconds
+    'uncommitted_changes': 5,   # 5 seconds  
+    'local_branches': 30,       # 30 seconds
+    'branch_info': 30,          # 30 seconds (for-each-ref)
+    'commit_counts': 60,        # 1 minute
+    'remote_branches': 300,     # 5 minutes
+    'merged_branches': 300,     # 5 minutes
+}
+
+class GitCache:
+    """Thread-safe cache for git command results with TTL support."""
+    
+    def __init__(self, ttl_config: Optional[Dict[str, int]] = None):
+        """Initialize cache with optional custom TTL configuration.
+        
+        Args:
+            ttl_config: Dictionary mapping cache keys to TTL values in seconds
+        """
+        self.cache: Dict[str, Tuple[Any, float]] = {}
+        self.lock = threading.Lock()
+        self.ttl_config = ttl_config or DEFAULT_CACHE_TTL.copy()
+        self.hits = 0
+        self.misses = 0
+    
+    def get(self, key: str) -> Optional[Any]:
+        """Get value from cache if it exists and hasn't expired.
+        
+        Args:
+            key: Cache key
+            
+        Returns:
+            Cached value if valid, None otherwise
+        """
+        with self.lock:
+            if key in self.cache:
+                value, timestamp = self.cache[key]
+                ttl = self.ttl_config.get(key, 60)  # Default 60s TTL
+                
+                if time.time() - timestamp < ttl:
+                    self.hits += 1
+                    return value
+                else:
+                    # Expired, remove from cache
+                    del self.cache[key]
+            
+            self.misses += 1
+            return None
+    
+    def set(self, key: str, value: Any) -> None:
+        """Store value in cache with current timestamp.
+        
+        Args:
+            key: Cache key
+            value: Value to cache
+        """
+        with self.lock:
+            self.cache[key] = (value, time.time())
+    
+    def invalidate(self, key: Optional[str] = None) -> None:
+        """Invalidate cache entries.
+        
+        Args:
+            key: Specific key to invalidate, or None to clear all
+        """
+        with self.lock:
+            if key is None:
+                self.cache.clear()
+            elif key in self.cache:
+                del self.cache[key]
+    
+    def invalidate_pattern(self, pattern: str) -> None:
+        """Invalidate all cache entries matching a pattern.
+        
+        Args:
+            pattern: String pattern to match against keys
+        """
+        with self.lock:
+            keys_to_delete = [k for k in self.cache.keys() if pattern in k]
+            for key in keys_to_delete:
+                del self.cache[key]
+    
+    def get_stats(self) -> Dict[str, int]:
+        """Get cache hit/miss statistics.
+        
+        Returns:
+            Dictionary with hits, misses, and hit rate
+        """
+        total = self.hits + self.misses
+        hit_rate = (self.hits / total * 100) if total > 0 else 0
+        
+        return {
+            'hits': self.hits,
+            'misses': self.misses,
+            'total': total,
+            'hit_rate': hit_rate,
+            'size': len(self.cache)
+        }
 
 class BranchInfo(NamedTuple):
     name: str
@@ -318,6 +420,23 @@ class GitBranchManager:
         self.config: Dict[str, Any] = self._load_config()
         self.url_builder: Optional[GitPlatformURLBuilder] = None
         self._init_url_builder()
+        
+        # Initialize cache with custom TTL if specified in config
+        cache_config = self.config.get('caching', {})
+        if cache_config.get('enabled', True):
+            ttl_multiplier = cache_config.get('ttl_multiplier', 1.0)
+            custom_ttl = {
+                key: int(value * ttl_multiplier) 
+                for key, value in DEFAULT_CACHE_TTL.items()
+            }
+            self.cache = GitCache(custom_ttl)
+        else:
+            self.cache = None  # Caching disabled
+        
+        # Thread pool for background operations
+        self.executor = ThreadPoolExecutor(max_workers=4)
+        self.enrichment_queue = Queue()
+        self.enrichment_in_progress = set()  # Track branches being enriched
         
     def _get_config_path(self) -> str:
         """Get the path to the configuration file.
@@ -1161,6 +1280,282 @@ class GitBranchManager:
                 except curses.error:
                     pass
     
+    def get_branches_progressive(self, stdscr=None) -> None:
+        """Get list of git branches with progressive loading.
+        
+        Phase 1: Load basic branch info immediately
+        Phase 2: Enrich with expensive data in background
+        
+        Args:
+            stdscr: Optional curses screen object for updating display
+        """
+        try:
+            # Phase 1: Get basic branch info quickly
+            # Get current branch (cached)
+            current_branch = None
+            if self.cache:
+                current_branch = self.cache.get('current_branch')
+            
+            if not current_branch:
+                current_result = self._run_command(
+                    ["git", "branch", "--show-current"],
+                    capture_output=True,
+                    text=True,
+                    check=True
+                )
+                current_branch = current_result.stdout.strip()
+                if self.cache:
+                    self.cache.set('current_branch', current_branch)
+            
+            self.current_branch = current_branch
+            self.branches = []
+            
+            # Collect all branch names first
+            all_branches = []
+            worktree_branches = set()
+            
+            # Get local branches (cached)
+            local_branches_data = None
+            if self.cache:
+                local_branches_data = self.cache.get('local_branches')
+            
+            if not local_branches_data:
+                result = self._run_command(
+                    ["git", "branch"],
+                    capture_output=True,
+                    text=True,
+                    check=True
+                )
+                local_branches_data = result.stdout
+                if self.cache:
+                    self.cache.set('local_branches', local_branches_data)
+            
+            lines = local_branches_data.strip().split('\n') if local_branches_data.strip() else []
+            
+            for line in lines:
+                branch_name = line.strip()
+                if branch_name.startswith('* '):
+                    branch_name = branch_name[2:]
+                elif branch_name.startswith('+ '):
+                    branch_name = branch_name[2:]
+                    worktree_branches.add(branch_name)
+                all_branches.append((branch_name, False, None))
+            
+            # Get remote branches if enabled
+            if self.show_remotes:
+                remote_branches_data = None
+                if self.cache:
+                    remote_branches_data = self.cache.get('remote_branches')
+                
+                if not remote_branches_data:
+                    remote_result = self._run_command(
+                        ["git", "branch", "-r"],
+                        capture_output=True,
+                        text=True,
+                        check=True
+                    )
+                    remote_branches_data = remote_result.stdout
+                    if self.cache:
+                        self.cache.set('remote_branches', remote_branches_data)
+                
+                remote_lines = remote_branches_data.strip().split('\n') if remote_branches_data.strip() else []
+                local_branch_names = {b[0] for b in all_branches if not b[1]}
+                
+                for line in remote_lines:
+                    branch_name = line.strip()
+                    if '->' in branch_name:
+                        continue
+                    
+                    if '/' in branch_name:
+                        parts = branch_name.split('/', 1)
+                        remote_name = parts[0]
+                        branch_short_name = parts[1]
+                        
+                        if branch_short_name in local_branch_names:
+                            continue
+                        
+                        all_branches.append((branch_name, True, remote_name))
+            
+            # Get basic branch info (cached)
+            cache_key = f'branch_info:{",".join([b[0] for b in all_branches])}'
+            batch_info = None
+            if self.cache:
+                batch_info = self.cache.get('branch_info')
+            
+            if not batch_info:
+                batch_info = self._get_batch_branch_info(all_branches, worktree_branches)
+                if self.cache:
+                    self.cache.set('branch_info', batch_info)
+            
+            # Check uncommitted changes once for current branch
+            has_uncommitted = False
+            if self.current_branch:
+                if self.cache:
+                    cached_uncommitted = self.cache.get('uncommitted_changes')
+                    if cached_uncommitted is not None:
+                        has_uncommitted = cached_uncommitted
+                    else:
+                        has_uncommitted = self._check_uncommitted_changes_batch()
+                        self.cache.set('uncommitted_changes', has_uncommitted)
+                else:
+                    has_uncommitted = self._check_uncommitted_changes_batch()
+            
+            # Build initial BranchInfo objects with basic data
+            for branch_name, is_remote, remote_name in all_branches:
+                if branch_name in batch_info:
+                    info = batch_info[branch_name]
+                    
+                    # Create branch with placeholder values for expensive data
+                    branch_info = BranchInfo(
+                        name=branch_name,
+                        is_current=(branch_name == self.current_branch),
+                        commit_hash=info['hash'],
+                        commit_date=datetime.fromtimestamp(info['timestamp']),
+                        commit_message=info['message'],
+                        commit_author=info['author'],
+                        has_uncommitted_changes=(has_uncommitted if branch_name == self.current_branch else False),
+                        is_remote=is_remote,
+                        remote_name=remote_name,
+                        has_upstream=False,  # Will be enriched
+                        is_merged=False,     # Will be enriched
+                        in_worktree=(branch_name in worktree_branches) if worktree_branches else False,
+                        commits_ahead=0,     # Will be enriched
+                        commits_behind=0     # Will be enriched
+                    )
+                    self.branches.append(branch_info)
+            
+            # Sort branches by commit date
+            self.branches.sort(key=lambda b: b.commit_date, reverse=True)
+            
+            # Apply filters and refresh display
+            self._apply_filters()
+            
+            # Phase 2: Enrich data in background
+            for i, branch in enumerate(self.branches):
+                if not branch.is_remote and branch.name not in self.enrichment_in_progress:
+                    self.enrichment_in_progress.add(branch.name)
+                    self.enrichment_queue.put((i, branch))
+            
+            # Start background enrichment
+            self._start_background_enrichment(stdscr)
+            
+        except subprocess.CalledProcessError as e:
+            # If git commands fail, use the old method as fallback
+            self.get_branches(stdscr)
+    
+    def _start_background_enrichment(self, stdscr=None):
+        """Start background threads to enrich branch data."""
+        
+        def enrich_branch_data(index: int, branch: BranchInfo):
+            """Enrich a single branch with expensive data."""
+            try:
+                # Get remote branches set (cached)
+                remote_branches = None
+                if self.cache:
+                    remote_branches = self.cache.get('remote_branches_set')
+                
+                if remote_branches is None:
+                    remote_branches = self._get_remote_branches_set()
+                    if self.cache:
+                        self.cache.set('remote_branches_set', remote_branches)
+                
+                # Get merged branches set (cached)
+                base_branch = self.config.get('default_base_branch', 'main')
+                all_local_branches = {b.name for b in self.branches if not b.is_remote}
+                if base_branch not in all_local_branches:
+                    if 'main' in all_local_branches:
+                        base_branch = 'main'
+                    elif 'master' in all_local_branches:
+                        base_branch = 'master'
+                
+                merged_branches = None
+                if self.cache:
+                    merged_branches = self.cache.get(f'merged_branches:{base_branch}')
+                
+                if merged_branches is None:
+                    merged_branches = self._get_merged_branches_set(base_branch)
+                    if self.cache:
+                        self.cache.set(f'merged_branches:{base_branch}', merged_branches)
+                
+                # Get commit counts (cached per branch)
+                commits_ahead = 0
+                commits_behind = 0
+                if base_branch and branch.name != base_branch:
+                    cache_key = f'commit_counts:{branch.name}:{base_branch}'
+                    counts = None
+                    if self.cache:
+                        counts = self.cache.get(cache_key)
+                    
+                    if counts is None:
+                        commits_ahead, commits_behind = self._get_branch_commit_counts(branch.name, base_branch)
+                        if self.cache:
+                            self.cache.set(cache_key, (commits_ahead, commits_behind))
+                    else:
+                        commits_ahead, commits_behind = counts
+                
+                # Create updated branch info
+                updated_branch = BranchInfo(
+                    name=branch.name,
+                    is_current=branch.is_current,
+                    commit_hash=branch.commit_hash,
+                    commit_date=branch.commit_date,
+                    commit_message=branch.commit_message,
+                    commit_author=branch.commit_author,
+                    has_uncommitted_changes=branch.has_uncommitted_changes,
+                    is_remote=branch.is_remote,
+                    remote_name=branch.remote_name,
+                    has_upstream=branch.name in remote_branches,
+                    is_merged=branch.name in merged_branches,
+                    in_worktree=branch.in_worktree,
+                    commits_ahead=commits_ahead,
+                    commits_behind=commits_behind
+                )
+                
+                return index, updated_branch
+                
+            except Exception as e:
+                # Return original branch on error
+                return index, branch
+            finally:
+                self.enrichment_in_progress.discard(branch.name)
+        
+        # Process enrichment queue in thread pool
+        futures = []
+        while not self.enrichment_queue.empty():
+            try:
+                index, branch = self.enrichment_queue.get_nowait()
+                future = self.executor.submit(enrich_branch_data, index, branch)
+                futures.append(future)
+            except:
+                break
+        
+        # Update branches as results come in
+        def update_branches():
+            for future in as_completed(futures):
+                try:
+                    index, updated_branch = future.result()
+                    if index < len(self.branches):
+                        self.branches[index] = updated_branch
+                        self._apply_filters()
+                        
+                        # Refresh display if stdscr provided
+                        if stdscr:
+                            # This would need to be called from main thread
+                            # For now, we'll rely on the main loop to refresh
+                            pass
+                except Exception as e:
+                    pass
+        
+        # Run updates in a separate thread
+        threading.Thread(target=update_branches, daemon=True).start()
+    
+    def load_branches(self, stdscr=None) -> None:
+        """Load branches using progressive loading if cache is enabled."""
+        if self.cache:
+            self.get_branches_progressive(stdscr)
+        else:
+            self.get_branches(stdscr)
+    
     def get_branches(self, stdscr=None) -> None:
         """Get list of git branches with commit info - optimized version.
         
@@ -1464,6 +1859,13 @@ class GitBranchManager:
                     text=True,
                     check=True
                 )
+            
+            # Invalidate cache after checkout
+            if self.cache:
+                self.cache.invalidate('current_branch')
+                self.cache.invalidate('uncommitted_changes')
+                self.cache.invalidate('local_branches')
+            
             return True
         except subprocess.CalledProcessError as e:
             print(f"Error checking out branch {branch}: {e}")
@@ -1488,6 +1890,14 @@ class GitBranchManager:
                 text=True,
                 check=True
             )
+            
+            # Invalidate cache after branch deletion
+            if self.cache:
+                self.cache.invalidate('local_branches')
+                self.cache.invalidate('branch_info')
+                self.cache.invalidate_pattern('commit_counts')
+                self.cache.invalidate_pattern('merged_branches')
+            
             return True
         except subprocess.CalledProcessError as e:
             # Try force delete if regular delete fails
@@ -1498,6 +1908,14 @@ class GitBranchManager:
                     text=True,
                     check=True
                 )
+                
+                # Invalidate cache after branch deletion
+                if self.cache:
+                    self.cache.invalidate('local_branches')
+                    self.cache.invalidate('branch_info')
+                    self.cache.invalidate_pattern('commit_counts')
+                    self.cache.invalidate_pattern('merged_branches')
+                
                 return True
             except subprocess.CalledProcessError:
                 return False
@@ -1522,6 +1940,15 @@ class GitBranchManager:
                 text=True,
                 check=True
             )
+            
+            # Invalidate cache after branch rename
+            if self.cache:
+                self.cache.invalidate('local_branches')
+                self.cache.invalidate('branch_info')
+                self.cache.invalidate_pattern('commit_counts')
+                if old_name == self.current_branch:
+                    self.cache.invalidate('current_branch')
+            
             return True
         except subprocess.CalledProcessError:
             return False
@@ -1656,6 +2083,7 @@ class GitBranchManager:
             ("  [+N]       N commits ahead of main/master", 0),
             ("  [-N]       N commits behind main/master", 0),
             ("  [+N/-M]    N ahead and M behind main/master", 0),
+            ("  ↻          Branch metadata still loading", 0),
             ("", 0),
             ("Color Coding:", curses.A_BOLD),
             ("  Green      Current branch, [+N] ahead only", 0),
@@ -1767,6 +2195,11 @@ class GitBranchManager:
             '  "custom_patterns": {',
             '    "branch": "https://git.example.com/{repo}/tree/{branch}",',
             '    "compare": "https://git.example.com/{repo}/compare/{base}...{branch}"',
+            '  },',
+            '  "caching": {',
+            '    "enabled": true,              // Enable/disable caching',
+            '    "ttl_multiplier": 1.0,        // Multiply all TTL values by this',
+            '    "aggressive_mode": false      // Use shorter TTLs for accuracy',
             '  }',
             "}",
             "",
@@ -1930,7 +2363,7 @@ class GitBranchManager:
         curses.init_pair(8, curses.COLOR_WHITE, curses.COLOR_BLACK)  # Normal text
         curses.init_pair(9, curses.COLOR_BLACK, curses.COLOR_CYAN)  # Footer
         
-        self.get_branches(stdscr)
+        self.load_branches(stdscr)
         
         while True:
             stdscr.clear()
@@ -2000,8 +2433,13 @@ class GitBranchManager:
                     elif branch_info.commits_behind > 0:
                         commit_count_indicator = f" [-{branch_info.commits_behind}]"
                 
+                # Add loading indicator if branch is still being enriched
+                loading_indicator = ""
+                if not branch_info.is_remote and branch_info.name in self.enrichment_in_progress:
+                    loading_indicator = " ↻"
+                
                 # Calculate available space for commit message
-                fixed_len = len(prefix) + len(branch_info.name) + len(modified_indicator) + len(unpushed_indicator) + len(merged_indicator) + len(worktree_indicator) + len(commit_count_indicator) + len(separator) * 3 + len(relative_date) + len(branch_info.commit_hash)
+                fixed_len = len(prefix) + len(branch_info.name) + len(modified_indicator) + len(unpushed_indicator) + len(merged_indicator) + len(worktree_indicator) + len(commit_count_indicator) + len(loading_indicator) + len(separator) * 3 + len(relative_date) + len(branch_info.commit_hash)
                 max_msg_len = width - fixed_len - 1
                 commit_msg = branch_info.commit_message
                 if len(commit_msg) > max_msg_len and max_msg_len > 3:
@@ -2074,6 +2512,10 @@ class GitBranchManager:
                             # Both ahead and behind - magenta
                             x_pos = self.safe_addstr(stdscr, y, x_pos, commit_count_indicator, curses.color_pair(5))
                     
+                    # Loading indicator - use cyan color with animation
+                    if loading_indicator:
+                        x_pos = self.safe_addstr(stdscr, y, x_pos, loading_indicator, curses.color_pair(4))
+                    
                     x_pos = self.safe_addstr(stdscr, y, x_pos, separator)
                     
                     # Date with age-based color
@@ -2131,6 +2573,13 @@ class GitBranchManager:
                             text=True,
                             check=True
                         )
+                        
+                        # Invalidate remote-related caches after fetch
+                        if self.cache:
+                            self.cache.invalidate('remote_branches')
+                            self.cache.invalidate('remote_branches_set')
+                            self.cache.invalidate_pattern('merged_branches')
+                        
                     except subprocess.CalledProcessError as e:
                         stdscr.clear()
                         stdscr.addstr(0, 0, f"Fetch failed: {e}")
@@ -2157,6 +2606,13 @@ class GitBranchManager:
                         text=True,
                         check=True
                     )
+                    
+                    # Invalidate remote-related caches after fetch
+                    if self.cache:
+                        self.cache.invalidate('remote_branches')
+                        self.cache.invalidate('remote_branches_set')
+                        self.cache.invalidate_pattern('merged_branches')
+                    
                     # Reload branches immediately after fetch
                     self.get_branches(stdscr)
                 except subprocess.CalledProcessError as e:
