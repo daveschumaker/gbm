@@ -1012,7 +1012,7 @@ class GitBranchManager:
                 title_with_dir = f" {title}"[:max_left_side]
         
         # Right-align version and help hint
-        version = "v1.0"
+        version = f"v{__version__}"
         right_text = f"{version} • Press ? for help "
         padding = width - len(title_with_dir) - len(right_text)
         if padding > 0:
