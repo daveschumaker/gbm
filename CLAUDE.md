@@ -19,7 +19,7 @@ Git Branch Manager is a terminal-based (TUI) Git branch management tool written 
 - **Branch Creation**: Create new branches with 'N' key
 - **Branch Protection**: Extra confirmation for deleting main/master branches
 - **Worktree Support**: Shows [worktree] indicator and prevents checkout of branches in other worktrees
-- **Performance Optimized**: Uses batch operations for fast loading in large repos
+- **Performance Optimized**: Progressive loading with caching for instant startup in large repos
 - **Browser Integration**: Open branches in web browser (GitHub, GitLab, Bitbucket, etc.)
 - **Push Status Detection**: Shows [unpushed] indicator for local branches not on remote
 - **Merge Status Detection**: Shows [merged] indicator for branches merged into main/master
@@ -162,10 +162,13 @@ Git Branch Manager is a terminal-based (TUI) Git branch management tool written 
 4. Update help text
 
 ## Performance Optimizations
+- **Progressive Loading**: Branches appear immediately with basic info, details load in background
+- **Smart Caching**: Caches expensive operations (uncommitted changes, worktree status) to reduce redundant Git calls
+- **Threading**: Background thread handles expensive operations without blocking UI
 - Uses `git for-each-ref` for batch operations instead of individual `git log` calls
 - Removed expensive merge/PR checking for faster loading
 - Efficient branch sorting by commit date
-- Loading indicator for better UX during operations
+- Loading indicators (⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏) show when background operations are in progress
 
 ## Known Limitations
 - Remote branch operations require network access
@@ -175,6 +178,11 @@ Git Branch Manager is a terminal-based (TUI) Git branch management tool written 
 - **Author Filter Fix**: Fixed email format mismatch that prevented the author filter from working correctly. The filter now properly strips angle brackets from git for-each-ref output to match git config user.email format.
 
 ## Recent Features Added
+- **Progressive Loading with Caching**: Instant startup with branches appearing immediately
+  - Basic branch info loads instantly, additional details load in background
+  - Smart caching reduces redundant Git operations
+  - Loading indicators show background operation progress
+  - Non-blocking UI for seamless interaction
 - **Stash Tracking**: The app now tracks the last stash it creates and shows it in the header
 - **Stash Recovery**: Press 'S' to pop the last stash created by the app
 - **Branch-Specific Stash Recovery**: Automatically detects and offers to apply git-branch-manager stashes when switching to a branch

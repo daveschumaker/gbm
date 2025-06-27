@@ -46,7 +46,7 @@ A powerful terminal-based (TUI) Git branch management tool that provides an inte
 - **Smart Sorting**: Branches sorted by most recent commits
 - **Color Coding**: Age-based coloring for quick visual scanning
 - **Browser Integration**: Open branches in GitHub, GitLab, Bitbucket, etc.
-- **Performance Optimized**: Uses batch operations for fast loading in large repos
+- **Performance Optimized**: Progressive loading with caching for instant startup, even in large repos
 - **Professional UI**: Nano-style footer with command shortcuts
 
 ## Installation

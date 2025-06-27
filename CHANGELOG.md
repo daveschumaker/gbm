@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2025-06-27
+
+### Added
+
+- Progressive loading with caching for instant startup
+  - Branches appear immediately with basic information
+  - Additional details (uncommitted changes, worktree status) load in background
+  - Smart caching reduces redundant Git operations
+  - Loading indicators show when background operations are in progress
+- Performance improvements for large repositories
+  - Eliminated startup delay even in repos with hundreds of branches
+  - Background thread handles expensive operations without blocking UI
+  - Optimized Git command usage with intelligent caching
+
+### Fixed
+
+- Remote branch display during progressive loading
+  - Remote branches now correctly show their remote indicators (↓) during initial load
+  - Fixed branch type detection to work with partial branch information
+
+### Changed
+
+- Branch loading is now non-blocking for better user experience
+- Initial branch display shows immediately, enhancing perceived performance
+
 ## [1.0.0] - 2025-06-25
 
 ### Added
